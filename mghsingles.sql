@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 05, 2022 at 11:37 PM
+-- Generation Time: Jan 06, 2022 at 03:47 AM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -144,7 +144,7 @@ CREATE TABLE `user` (
   `name` varchar(50) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
   `email` varchar(200) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
   `superuser` int(11) DEFAULT NULL,
-  `passwordHash` varchar(50) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL
+  `passwordHash` varchar(100) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 --
