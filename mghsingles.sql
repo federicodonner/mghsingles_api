@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 05, 2022 at 10:47 PM
+-- Generation Time: Jan 05, 2022 at 11:37 PM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -59,8 +59,9 @@ CREATE TABLE `cardCondition` (
 DROP TABLE IF EXISTS `cardGeneral`;
 CREATE TABLE `cardGeneral` (
   `scryfallId` varchar(50) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
-  `name` int(11) NOT NULL,
-  `cardSet` int(11) NOT NULL
+  `name` varchar(500) NOT NULL,
+  `cardSet` varchar(100) NOT NULL,
+  `image` varchar(500) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- --------------------------------------------------------
@@ -259,7 +260,6 @@ ALTER TABLE `user`
 -- Constraints for table `card`
 --
 ALTER TABLE `card`
-  ADD CONSTRAINT `card_cardGeneral` FOREIGN KEY (`scryfallId`) REFERENCES `cardGeneral` (`scryfallId`),
   ADD CONSTRAINT `card_collection` FOREIGN KEY (`collectionId`) REFERENCES `collection` (`id`),
   ADD CONSTRAINT `card_condition` FOREIGN KEY (`conditionId`) REFERENCES `cardCondition` (`id`),
   ADD CONSTRAINT `card_language` FOREIGN KEY (`languageId`) REFERENCES `cardLanguage` (`id`);

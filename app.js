@@ -20,6 +20,10 @@ app.use(cors());
 var oauthRoute = require("./routes/oauth");
 app.use("/oauth", oauthRoute);
 
+// Routes for getting bulk cards
+var bulkRoute = require("./routes/processBulk");
+app.use("/bulk", bulkRoute);
+
 app.listen("3001", () => {
   console.log("server started on port 3001");
 });
