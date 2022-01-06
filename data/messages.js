@@ -1,6 +1,7 @@
 const messages = {
-  USUARIO_NOT_FOUND:
+  USER_NOT_FOUND:
     "El usuario especificado no existe, revise los datos y vuelva a intentarlo.",
+  INCORRECT_PASSWORD: "La contraseña ingresada es incorrecta.",
   UNAUTHORIZED: "Ocurrió un error, por favor vuelve a ingresar.",
   PARAMETERS_ERROR:
     "Algunos de los parámetros no son correctos, verifícalos y vuelve a intentar.",

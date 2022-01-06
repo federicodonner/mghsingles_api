@@ -5,6 +5,7 @@ const multer = require("multer");
 const upload = multer();
 var db = require("../config/db");
 const { check, escape, validationResult } = require("express-validator");
+const bcrypt = require("bcrypt");
 var messages = require("../data/messages");
 var utils = require("../utils/utils");
 
@@ -19,9 +20,10 @@ router.post("/", [upload.none(), check("username").escape()], (req, res) => {
   }
   // Loads the data into variables to use
   var username = req.body.username;
+  var password = req.body.password;
 
   // Validates that all the compulsory fields are present
-  if (!username) {
+  if (!username || !password) {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
   // Verifies that the user exists
@@ -31,27 +33,34 @@ router.post("/", [upload.none(), check("username").escape()], (req, res) => {
     if (err) {
       throw err;
     }
-    // Verify that there is at least one casa with that hash
+    // Verifies that the user exists
     if (!results.length) {
-      return res.status(404).json({ message: messages.USUARIO_NOT_FOUND });
+      return res.status(404).json({ message: messages.USER_NOT_FOUND });
     }
-    // Generate the login record with the token
-    var userId = results[0].id;
-    var currentTimestamp = Math.round(new Date() / 1000);
-    var loginToken = utils.generateToken(25);
-    sql =
-      "INSERT INTO login (date, userId, token) VALUES (" +
-      currentTimestamp +
-      "," +
-      userId +
-      ",'" +
-      loginToken +
-      "')";
-    query = db.query(sql, (err, results) => {
-      if (err) {
-        throw err;
+    // Verifies that the password is correct
+    hashedPassword = results[0].passwordHash;
+    bcrypt.compare(password, hashedPassword, function (err, passwordResult) {
+      if (!passwordResult) {
+        return res.status(401).json({ message: messages.INCORRECT_PASSWORD });
       }
-      return res.status(200).json({ token: loginToken });
+      // Generate the login record with the token
+      var userId = results[0].id;
+      var currentTimestamp = Math.round(new Date() / 1000);
+      var loginToken = utils.generateToken(25);
+      sql =
+        "INSERT INTO login (date, userId, token) VALUES (" +
+        currentTimestamp +
+        "," +
+        userId +
+        ",'" +
+        loginToken +
+        "')";
+      query = db.query(sql, (err, results) => {
+        if (err) {
+          throw err;
+        }
+        return res.status(200).json({ token: loginToken });
+      });
     });
   });
 });
