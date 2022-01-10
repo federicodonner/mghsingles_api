@@ -13,8 +13,12 @@ app.use(
 app.use(cors());
 
 // Middleware for authentication
-// var authenticationMiddleware = require("./middleware/authentication");
-// app.use("/", authenticationMiddleware.authentication);
+var authenticationMiddleware = require("./middleware/authentication");
+app.use("/collection", authenticationMiddleware.authentication);
+
+// Middleware for authentication
+var authenticationMiddleware = require("./middleware/authentication");
+app.use("/sale", authenticationMiddleware.authentication);
 
 // Routes for oauth
 var oauthRoute = require("./routes/oauth");
@@ -27,6 +31,14 @@ app.use("/bulk", bulkRoute);
 // Routes for user operations
 var userRoute = require("./routes/user");
 app.use("/user", userRoute);
+
+// Routes for user operations
+var collectionRoute = require("./routes/collection");
+app.use("/collection", collectionRoute);
+
+// Routes for user operations
+var saleRoute = require("./routes/sale");
+app.use("/sale", saleRoute);
 
 app.listen("3001", () => {
   console.log("server started on port 3001");

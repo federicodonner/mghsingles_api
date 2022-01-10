@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 06, 2022 at 03:47 AM
+-- Generation Time: Jan 10, 2022 at 11:40 PM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -61,6 +61,7 @@ CREATE TABLE `cardGeneral` (
   `scryfallId` varchar(50) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
   `name` varchar(500) NOT NULL,
   `cardSet` varchar(100) NOT NULL,
+  `cardSetName` varchar(100) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL,
   `image` varchar(500) CHARACTER SET utf8 COLLATE utf8_bin NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -124,11 +125,35 @@ CREATE TABLE `login` (
 DROP TABLE IF EXISTS `sale`;
 CREATE TABLE `sale` (
   `id` int(11) NOT NULL,
-  `cardId` int(11) NOT NULL,
+  `collectionId` int(11) NOT NULL,
+  `scryfallId` varchar(100) NOT NULL,
+  `price` float NOT NULL,
+  `percentage` float NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `date` int(12) NOT NULL,
+  `conditionId` int(11) NOT NULL,
+  `languageId` int(11) NOT NULL,
+  `foil` int(11) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `saleOLD`
+--
+
+DROP TABLE IF EXISTS `saleOLD`;
+CREATE TABLE `saleOLD` (
+  `id` int(11) NOT NULL,
+  `collectionId` int(11) NOT NULL,
+  `scryfallId` int(11) NOT NULL,
   `price` float NOT NULL,
   `commissionPercent` float NOT NULL,
   `quantity` int(11) NOT NULL,
-  `date` int(12) NOT NULL
+  `date` int(12) NOT NULL,
+  `conditionId` int(11) NOT NULL,
+  `languageId` int(11) NOT NULL,
+  `foil` int(11) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- --------------------------------------------------------
@@ -198,7 +223,16 @@ ALTER TABLE `login`
 --
 ALTER TABLE `sale`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `sale_card` (`cardId`);
+  ADD KEY `sale_collection` (`collectionId`),
+  ADD KEY `sale_condition` (`conditionId`),
+  ADD KEY `sale_language` (`languageId`);
+
+--
+-- Indexes for table `saleOLD`
+--
+ALTER TABLE `saleOLD`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `sale_card` (`scryfallId`);
 
 --
 -- Indexes for table `user`
@@ -247,6 +281,12 @@ ALTER TABLE `sale`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
+-- AUTO_INCREMENT for table `saleOLD`
+--
+ALTER TABLE `saleOLD`
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
+
+--
 -- AUTO_INCREMENT for table `user`
 --
 ALTER TABLE `user`
@@ -280,7 +320,9 @@ ALTER TABLE `login`
 -- Constraints for table `sale`
 --
 ALTER TABLE `sale`
-  ADD CONSTRAINT `sale_card` FOREIGN KEY (`cardId`) REFERENCES `card` (`id`);
+  ADD CONSTRAINT `sale_collection` FOREIGN KEY (`collectionId`) REFERENCES `collection` (`id`),
+  ADD CONSTRAINT `sale_condition` FOREIGN KEY (`conditionId`) REFERENCES `cardCondition` (`id`),
+  ADD CONSTRAINT `sale_language` FOREIGN KEY (`languageId`) REFERENCES `cardLanguage` (`id`);
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
