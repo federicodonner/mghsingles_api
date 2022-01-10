@@ -1,57 +1,85 @@
 var express = require("express");
 var router = express.Router();
-var fetch = require("cross-fetch");
 var db = require("../config/db");
+var utils = require("../utils/utils");
 
 // First, the route receives the request and pings Scryfall
 // looking for the URL of the data bulk
 router.get("/", (req, res) => {
   const scryfallUrl = process.env.SCRYFALL_BULK_URL;
-  accessURL(
+  utils.accessURL(
     scryfallUrl,
     (bulkLibraries) => {
       // Once it has the bulk libraries, it finds the
       // unique_artwork URL
       var bulkDataURL = null;
       bulkLibraries.data.forEach((bulkPack) => {
-        if (bulkPack.type === "unique_artwork") {
+        if (bulkPack.type === "default_cards") {
           bulkDataURL = bulkPack.download_uri;
         }
       });
       // Once it has the unique_artwork URL, it accesses it to find the data
-      accessURL(
+      utils.accessURL(
         bulkDataURL,
         (data) => {
           // Once the data arrives, it processes it
+          // Delets the old data
           let sql = "TRUNCATE TABLE cardGeneral";
           let query = db.query(sql, (err, results) => {
             if (err) {
               throw err;
             }
           });
+          // numberOfCards allows the endpoint to report on how many cards it added
           let numberOfCards = 0;
-          data.forEach((card) => {
-            let scryfallId = card.id;
-            let name = card.name.replace(/"/g, "");
-            let cardSet = card.set_name;
-            let image = card.image_uris?.normal;
+          // It's going to process cards in batches of 1000
+          let batchNumber = 5000;
+          let maxIndexToInsert = batchNumber;
+          let scryfallId;
+          let name;
+          let cardSetName;
+          let cardSet;
+          let image;
+          while (maxIndexToInsert < data.length) {
             sql =
-              'INSERT INTO cardGeneral (scryfallId, name, cardSet, image) VALUES ("' +
-              scryfallId +
-              '","' +
-              name +
-              '","' +
-              cardSet +
-              '","' +
-              image +
-              '")';
+              "INSERT INTO cardGeneral (scryfallId, name, cardSet, cardSetName, image) VALUES ";
+            for (
+              let i = maxIndexToInsert - batchNumber;
+              i < maxIndexToInsert;
+              i++
+            ) {
+              scryfallId = data[i].id;
+              name = data[i].name.replace(/"/g, "");
+              cardSetName = data[i].set_name;
+              cardSet = data[i].set;
+              image = data[i].image_uris?.normal;
+              sql =
+                sql +
+                '("' +
+                scryfallId +
+                '","' +
+                name +
+                '","' +
+                cardSet +
+                '","' +
+                cardSetName +
+                '","' +
+                image +
+                '"),';
+              numberOfCards++;
+            }
+            sql =
+              sql +
+              '("00000-00000-' +
+              maxIndexToInsert +
+              '","Last card", "SET", "Last card set", "no image")';
             query = db.query(sql, (err, results) => {
               if (err) {
                 throw err;
               }
             });
-            numberOfCards++;
-          });
+            maxIndexToInsert = maxIndexToInsert + batchNumber;
+          }
           res
             .status(200)
             .send(
@@ -64,40 +92,5 @@ router.get("/", (req, res) => {
     res
   );
 });
-
-// Access external URL
-// Receives res to be able to return errors if they happen
-function accessURL(url, successCallback, res) {
-  Promise.race([
-    // Generate two promies, one with the fecth and the other with the timeout
-    // the one that finishes first resolves
-    fetch(url, { method: "GET" }),
-    new Promise(function (resolve, reject) {
-      setTimeout(() => reject(new Error("request timeout")), 30000);
-    }),
-  ])
-    .then((response) => {
-      // When race resolves, it verifies the status of the API response
-      // If it's 200 or 201, it was successful
-      // Get the URI for the resource to get the new fetch.
-      if (response.status >= 200 && response.status < 300) {
-        response.json().then((data) => {
-          successCallback(data);
-        });
-      } else {
-        response.json().then((data) => {
-          data.status = response.status;
-          res.send(data);
-        });
-      }
-    })
-    .catch((e) => {
-      // var response = {
-      //   status: 500,
-      //   detail: texts.API_ERROR,
-      // };
-      res.send("error");
-    });
-}
 
 module.exports = router;
