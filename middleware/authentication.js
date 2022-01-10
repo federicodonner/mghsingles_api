@@ -3,8 +3,17 @@ var db = require("../config/db.js");
 var messages = require("../data/messages.js");
 
 function authentication(req, res, next) {
-  // Get the token from the request headers
-  let loginToken = req.header("authorization");
+  // Verifies that the authorization header exists
+  if (!req.header("authorization")) {
+    return res.status(401).json({ message: messages.UNAUTHORIZED });
+  }
+  // If the structure is not "Bearer [accesstoken] return error"
+  let authorizationHeader = req.header("authorization").split(" ");
+  if (authorizationHeader[0] !== "Bearer" && authorizationHeader.length != 2) {
+    return res.status(401).json({ message: messages.UNAUTHORIZED });
+  }
+
+  let loginToken = authorizationHeader[1];
   let userId = null;
   // If there is no token return unauthenticated
   if (!loginToken) {
