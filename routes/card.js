@@ -47,4 +47,21 @@ router.get(
   }
 );
 
+// Returns the possible conditions and languages
+router.get("/modifiers", (req, res) => {
+  let sql = "SELECT * FROM cardCondition";
+  let query = db.query(sql, (err, conditions) => {
+    if (err) {
+      throw err;
+    }
+    sql = "SELECT * FROM cardLanguage";
+    let query = db.query(sql, (err, languages) => {
+      if (err) {
+        throw err;
+      }
+      res.status(200).json({ conditions, languages });
+    });
+  });
+});
+
 module.exports = router;
