@@ -35,6 +35,10 @@ router.get(
         return res.status(404).json({ message: messages.CARD_NOT_FOUND });
       }
 
+      if (cards.length >= 200) {
+        return res.status(400).json({ message: messages.TOO_MANY_CARDS });
+      }
+
       return res.status(200).json(cards);
     });
   }
