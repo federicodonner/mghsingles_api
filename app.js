@@ -32,13 +32,17 @@ app.use("/bulk", bulkRoute);
 var userRoute = require("./routes/user");
 app.use("/user", userRoute);
 
-// Routes for user operations
+// Routes for collection operations
 var collectionRoute = require("./routes/collection");
 app.use("/collection", collectionRoute);
 
-// Routes for user operations
+// Routes for sale operations
 var saleRoute = require("./routes/sale");
 app.use("/sale", saleRoute);
+
+// Routes for card operations
+var cardRoute = require("./routes/card");
+app.use("/card", cardRoute);
 
 app.listen("3001", () => {
   console.log("server started on port 3001");

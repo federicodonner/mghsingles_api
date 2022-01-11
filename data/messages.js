@@ -12,6 +12,8 @@ const messages = {
   USERNAME_CORRECT: "El nombre de usuario seleccionado es correcto.",
   COLLECTION_PROBLEM:
     "Hubo un problema cargando tu colección, por favor inténtalo nuevamente más tarde o ponte en contacto con el administrador.",
+  CARD_NOT_FOUND: "La carta especificada no existe, por favor verifícala.",
+  COLLECTION_UPDATED: "Su colección ha sido actualizada con éxito",
 };
 
 module.exports = messages;
