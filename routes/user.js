@@ -109,4 +109,24 @@ router.post(
   }
 );
 
+// Return user's details based on the token
+router.get("/me", (req, res) => {
+  // Gets the userId from the authentication middleware
+  var userId = req.userId;
+  let sql = "SELECT * FROM user WHERE id = " + userId;
+  let query = db.query(sql, (err, users) => {
+    if (err) {
+      throw err;
+    }
+    // If there are no results, return error
+    if (!users.length) {
+      return res.status(401).json({ message: messages.UNAUTHORIZED });
+    }
+    // If there is a user, return it
+    delete users[0].passwordHash;
+    delete users[0].id;
+    res.status(200).json(users[0]);
+  });
+});
+
 module.exports = router;

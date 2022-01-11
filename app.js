@@ -15,10 +15,8 @@ app.use(cors());
 // Middleware for authentication
 var authenticationMiddleware = require("./middleware/authentication");
 app.use("/collection", authenticationMiddleware.authentication);
-
-// Middleware for authentication
-var authenticationMiddleware = require("./middleware/authentication");
 app.use("/sale", authenticationMiddleware.authentication);
+app.use("/user/me", authenticationMiddleware.authentication);
 
 // Routes for oauth
 var oauthRoute = require("./routes/oauth");
