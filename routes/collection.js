@@ -31,7 +31,8 @@ router.get("/", (req, res) => {
     var collectionId = collections[0].id;
     sql =
       "SELECT c.id, c.quantity, c.foil,  cg.name, cg.cardSet, cg.cardSetName, cg.image, o.name AS 'condition', l.name AS 'language' FROM card c LEFT JOIN cardGeneral cg ON c.scryfallId = cg.scryfallId LEFT JOIN cardCondition o ON c.conditionId = o.id LEFT JOIN cardLanguage l ON c.languageId = l.id WHERE collectionId = " +
-      collectionId;
+      collectionId +
+      " ORDER BY cg.name";
     query = db.query(sql, (err, cards) => {
       if (err) {
         throw err;

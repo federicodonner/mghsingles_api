@@ -26,7 +26,10 @@ router.get(
     }
 
     // Finds the card in the database
-    let sql = 'SELECT * FROM cardGeneral WHERE name like "%' + cardName + '%"';
+    let sql =
+      'SELECT * FROM cardGeneral WHERE name like "%' +
+      cardName +
+      '%" ORDER BY name, cardSet';
     let query = db.query(sql, (err, cards) => {
       if (err) {
         throw err;
@@ -35,7 +38,7 @@ router.get(
         return res.status(404).json({ message: messages.CARD_NOT_FOUND });
       }
 
-      if (cards.length >= 200) {
+      if (cards.length >= 800) {
         return res.status(400).json({ message: messages.TOO_MANY_CARDS });
       }
 
