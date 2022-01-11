@@ -29,70 +29,77 @@ router.get("/", (req, res) => {
             if (err) {
               throw err;
             }
-          });
-          // numberOfCards allows the endpoint to report on how many cards it added
-          let numberOfCards = 0;
-          // It's going to process cards in batches of 1000
-          let batchNumber = 5000;
-          let maxIndexToInsert = batchNumber;
-          let scryfallId;
-          let name;
-          let cardSetName;
-          let cardSet;
-          let image;
-          while (maxIndexToInsert < data.length) {
-            sql =
-              "INSERT INTO cardGeneral (scryfallId, name, cardSet, cardSetName, image) VALUES ";
-            for (
-              let i = maxIndexToInsert - batchNumber;
-              i < maxIndexToInsert;
-              i++
-            ) {
-              // If the card is only digital, skip it
-              if (!data[i].digital) {
-                scryfallId = data[i].id;
-                name = data[i].name.replace(/"/g, "");
-                cardSetName = data[i].set_name;
-                cardSet = data[i].set;
-                // If the card has multiple faces, load the front one as the image
-                if (data[i].card_faces) {
-                  image = data[i].card_faces[0].image_uris?.normal;
-                } else {
-                  image = data[i].image_uris?.normal;
+            // numberOfCards allows the endpoint to report on how many cards it added
+            let numberOfCards = 0;
+            // It's going to process cards in batches of 1000
+            let batchNumber = 5000;
+            let maxIndexToInsert = batchNumber;
+            let scryfallId;
+            let name;
+            let cardSetName;
+            let cardSet;
+            let image;
+            let donePassing = true;
+            while (donePassing) {
+              sql =
+                "INSERT INTO cardGeneral (scryfallId, name, cardSet, cardSetName, image) VALUES ";
+              for (
+                let i = maxIndexToInsert - batchNumber;
+                i < Math.min(maxIndexToInsert, data.length);
+                i++
+              ) {
+                // If the card is only digital, skip it
+                if (!data[i].digital) {
+                  scryfallId = data[i].id;
+                  name = data[i].name.replace(/"/g, "");
+                  cardSetName = data[i].set_name;
+                  cardSet = data[i].set;
+                  // If the card has multiple faces, load the front one as the image
+                  if (data[i].image_uris?.normal) {
+                    image = data[i].image_uris?.normal;
+                  } else if (data[i].card_faces[0]?.image_uris?.normal) {
+                    image = data[i].card_faces[0].image_uris?.normal;
+                  }
+                  sql =
+                    sql +
+                    '("' +
+                    scryfallId +
+                    '","' +
+                    name +
+                    '","' +
+                    cardSet +
+                    '","' +
+                    cardSetName +
+                    '","' +
+                    image +
+                    '"),';
+                  numberOfCards++;
                 }
-                sql =
-                  sql +
-                  '("' +
-                  scryfallId +
-                  '","' +
-                  name +
-                  '","' +
-                  cardSet +
-                  '","' +
-                  cardSetName +
-                  '","' +
-                  image +
-                  '"),';
-                numberOfCards++;
               }
+              sql =
+                sql +
+                '("00000-00000-' +
+                maxIndexToInsert +
+                '","Last card", "SET", "Last card set", "no image")';
+              query = db.query(sql, (err, results) => {
+                if (err) {
+                  throw err;
+                }
+              });
+              // When it's the last pass, stop iterating
+              if (maxIndexToInsert > data.length) {
+                donePassing = false;
+              }
+              maxIndexToInsert = maxIndexToInsert + batchNumber;
             }
-            sql =
-              sql +
-              '("00000-00000-' +
-              maxIndexToInsert +
-              '","Last card", "SET", "Last card set", "no image")';
-            query = db.query(sql, (err, results) => {
-              if (err) {
-                throw err;
-              }
-            });
-            maxIndexToInsert = maxIndexToInsert + batchNumber;
-          }
-          res
-            .status(200)
-            .send(
-              "Update finished, " + numberOfCards + " cards added to database."
-            );
+            res
+              .status(200)
+              .send(
+                "Update finished, " +
+                  numberOfCards +
+                  " cards added to database."
+              );
+          });
         },
         res
       );
