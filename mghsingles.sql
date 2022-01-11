@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 10, 2022 at 11:40 PM
+-- Generation Time: Jan 11, 2022 at 01:09 AM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -34,8 +34,7 @@ CREATE TABLE `card` (
   `languageId` int(11) NOT NULL,
   `quantity` int(11) NOT NULL,
   `collectionId` int(11) NOT NULL,
-  `foil` int(11) DEFAULT NULL,
-  `targetPrice` float DEFAULT NULL
+  `foil` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- --------------------------------------------------------
