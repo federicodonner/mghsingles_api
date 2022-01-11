@@ -52,7 +52,12 @@ router.get("/", (req, res) => {
               name = data[i].name.replace(/"/g, "");
               cardSetName = data[i].set_name;
               cardSet = data[i].set;
-              image = data[i].image_uris?.normal;
+              // If the card has multiple faces, load the front one as the image
+              if (data[i].card_faces) {
+                image = data[i].card_faces[0].image_uris?.normal;
+              } else {
+                image = data[i].image_uris?.normal;
+              }
               sql =
                 sql +
                 '("' +
