@@ -17,6 +17,7 @@ var authenticationMiddleware = require("./middleware/authentication");
 app.use("/collection", authenticationMiddleware.authentication);
 app.use("/sale", authenticationMiddleware.authentication);
 app.use("/user/me", authenticationMiddleware.authentication);
+app.use("/card/:cardId", authenticationMiddleware.authentication);
 
 // Routes for oauth
 var oauthRoute = require("./routes/oauth");
