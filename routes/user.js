@@ -75,32 +75,45 @@ router.post(
             throw err;
           }
 
-          // After the usuario is inserted, create a login record and return it
+          // After the user is inserted, create a collection and add it to it
           sql = "SELECT * FROM user WHERE id = LAST_INSERT_ID()";
           query = db.query(sql, (err, userResults) => {
             if (err) {
               throw err;
             }
             var userId = userResults[0].id;
-            var currentTimestamp = Math.round(new Date() / 1000);
-            var loginToken = utils.generateToken(25);
+
             sql =
-              "INSERT INTO login (date, userId, token) VALUES (" +
-              currentTimestamp +
-              "," +
+              "INSERT INTO collection (userId, active) VALUES (" +
               userId +
-              ",'" +
-              loginToken +
-              "')";
-            query = db.query(sql, (err, results) => {
+              ",1)";
+
+            query = db.query(sql, (err, collection) => {
               if (err) {
                 throw err;
               }
-              // Add the generated token to the response
-              userResults[0].token = loginToken;
-              delete userResults[0].id;
-              delete userResults[0].passwordHash;
-              res.status(201).send(userResults[0]);
+
+              // After the user is inserted, create a login record and return it
+              var currentTimestamp = Math.round(new Date() / 1000);
+              var loginToken = utils.generateToken(25);
+              sql =
+                "INSERT INTO login (date, userId, token) VALUES (" +
+                currentTimestamp +
+                "," +
+                userId +
+                ",'" +
+                loginToken +
+                "')";
+              query = db.query(sql, (err, results) => {
+                if (err) {
+                  throw err;
+                }
+                // Add the generated token to the response
+                userResults[0].token = loginToken;
+                delete userResults[0].id;
+                delete userResults[0].passwordHash;
+                res.status(201).send(userResults[0]);
+              });
             });
           });
         });
