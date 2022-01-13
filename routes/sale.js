@@ -7,7 +7,7 @@ var db = require("../config/db");
 const { check, validationResult } = require("express-validator");
 var messages = require("../data/messages");
 
-// Get the user's collection
+// Get the user's sales
 router.get("/", (req, res) => {
   // Gets the userId from the authentication middleware
   var userId = req.userId;

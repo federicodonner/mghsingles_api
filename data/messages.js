@@ -16,6 +16,7 @@ const messages = {
   COLLECTION_UPDATED: "Su colección ha sido actualizada con éxito.",
   TOO_MANY_CARDS:
     "Tu búsqueda devolvió demasiadas cartas, por favor intenta nuevamente con términos más específicos.",
+  SEARCH_NOT_FOUND: "Carta no encontrada, por favor verifique la búsqueda.",
 };
 
 module.exports = messages;

@@ -43,6 +43,10 @@ app.use("/sale", saleRoute);
 var cardRoute = require("./routes/card");
 app.use("/card", cardRoute);
 
+// Routes for store operations
+var storeRoute = require("./routes/store");
+app.use("/store", storeRoute);
+
 app.listen("3001", () => {
   console.log("server started on port 3001");
 });

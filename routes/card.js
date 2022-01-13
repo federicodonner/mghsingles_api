@@ -76,7 +76,7 @@ router.delete(
 
     // Verifies that the card exists and that it's in the user's collection
     let sql =
-      "SELECT c.scryfallId FROM card c  LEFT JOIN collection o ON c.collectionId = o.id LEFT JOIN user u ON o.userId = u.id WHERE c.id = " +
+      "SELECT c.scryfallId FROM card c LEFT JOIN collection o ON c.collectionId = o.id LEFT JOIN user u ON o.userId = u.id WHERE c.id = " +
       cardId +
       " AND u.id = " +
       userId;
