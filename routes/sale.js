@@ -24,7 +24,8 @@ router.get("/", (req, res) => {
     var collectionId = collections[0].id;
     sql =
       'SELECT s.price, s.percent, s.quantity, s.date, s.conditionId, s.languageId, s.foil, cg.*, o.name AS "condition", l.name AS "language" FROM sale s LEFT JOIN cardGeneral cg ON s.scryfallId = cg.scryfallId LEFT JOIN cardCondition o ON s.conditionId = o.id LEFT JOIN cardLanguage l ON s.languageId = l.id WHERE collectionId = ' +
-      collectionId;
+      collectionId +
+      " ORDER BY s.date DESC, cg.name";
     query = db.query(sql, (err, sales) => {
       if (err) {
         throw err;
