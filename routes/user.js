@@ -1,8 +1,6 @@
 // Route file for getting and editing users
 var express = require("express");
 var router = express.Router();
-const multer = require("multer");
-const upload = multer();
 var db = require("../config/db");
 const {
   check,
@@ -18,7 +16,6 @@ var utils = require("../utils/utils");
 router.post(
   "/",
   [
-    upload.none(),
     check("username").escape(),
     check("name").escape(),
     check("email").isEmail(),

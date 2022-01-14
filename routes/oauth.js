@@ -1,8 +1,6 @@
 // Route file for getting and editing gastos
 var express = require("express");
 var router = express.Router();
-const multer = require("multer");
-const upload = multer();
 var db = require("../config/db");
 const { check, escape, validationResult } = require("express-validator");
 const bcrypt = require("bcrypt");
@@ -10,14 +8,13 @@ var messages = require("../data/messages");
 var utils = require("../utils/utils");
 
 // Validate the user and return the token
-// MISSING PASSWORD VALIDATION, V1 WON'T HAVE PASSOWRD
-router.post("/", [upload.none(), check("username").escape()], (req, res) => {
+router.post("/", (req, res) => {
   // Validates that the parameters are correct
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    // If one of them isn't, returns an error
-    return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-  }
+  // const errors = validationResult(req);
+  // if (!errors.isEmpty()) {
+  //   // If one of them isn't, returns an error
+  //   return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+  // }
   // Loads the data into variables to use
   var username = req.body.username;
   var password = req.body.password;
@@ -37,6 +34,8 @@ router.post("/", [upload.none(), check("username").escape()], (req, res) => {
     if (!results.length) {
       return res.status(404).json({ message: messages.USER_NOT_FOUND });
     }
+    // Stores the superuser status of the user for the UI
+    let superuser = results[0].superuser;
     // Verifies that the password is correct
     hashedPassword = results[0].passwordHash;
     bcrypt.compare(password, hashedPassword, function (err, passwordResult) {
@@ -59,7 +58,7 @@ router.post("/", [upload.none(), check("username").escape()], (req, res) => {
         if (err) {
           throw err;
         }
-        return res.status(200).json({ token: loginToken });
+        return res.status(200).json({ token: loginToken, superuser });
       });
     });
   });

@@ -17,6 +17,10 @@ const messages = {
   TOO_MANY_CARDS:
     "Tu búsqueda devolvió demasiadas cartas, por favor intenta nuevamente con términos más específicos.",
   SEARCH_NOT_FOUND: "Carta no encontrada, por favor verifique la búsqueda.",
+  SALE_REPEAT_CARDS: "Hay cartas repetidas en la venta, por favor verifíquela.",
+  SALE_NOT_ENOUGH_STOCK:
+    "No hay stock suficiente de una de las cartas para la venta.",
+  SALE_PROCESSED: "Venta procesada correctamente.",
 };
 
 module.exports = messages;

@@ -1,8 +1,6 @@
 // Route file for operations to the user's collection
 var express = require("express");
 var router = express.Router();
-const multer = require("multer");
-const upload = multer();
 var db = require("../config/db");
 const {
   check,
@@ -48,7 +46,6 @@ router.get("/", (req, res) => {
 router.post(
   "/",
   [
-    upload.none(),
     check("scryfallId").escape(),
     check("quantity").isNumeric().isFloat({ min: 1 }),
     check("condition").isNumeric(),
