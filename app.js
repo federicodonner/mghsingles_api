@@ -22,6 +22,7 @@ app.use("/collection", authenticationMiddleware.authentication);
 app.use("/sale", authenticationMiddleware.authentication);
 app.use("/user/me", authenticationMiddleware.authentication);
 app.use("/card/:cardId", authenticationMiddleware.authentication);
+app.use("/payment", authenticationMiddleware.authentication);
 
 // Routes for oauth
 var oauthRoute = require("./routes/oauth");
@@ -50,6 +51,10 @@ app.use("/card", cardRoute);
 // Routes for store operations
 var storeRoute = require("./routes/store");
 app.use("/store", storeRoute);
+
+// Routes for payment operations
+var paymentRoute = require("./routes/payment");
+app.use("/payment", paymentRoute);
 
 app.listen("3001", () => {
   console.log("server started on port 3001");

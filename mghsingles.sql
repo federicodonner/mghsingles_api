@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 11, 2022 at 01:09 AM
+-- Generation Time: Jan 14, 2022 at 10:45 PM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -87,7 +87,7 @@ CREATE TABLE `collection` (
   `id` int(11) NOT NULL,
   `userId` int(11) NOT NULL,
   `active` int(11) DEFAULT NULL,
-  `specialPercent` float DEFAULT NULL
+  `percent` float DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
 -- --------------------------------------------------------
@@ -118,6 +118,20 @@ CREATE TABLE `login` (
 -- --------------------------------------------------------
 
 --
+-- Table structure for table `payment`
+--
+
+DROP TABLE IF EXISTS `payment`;
+CREATE TABLE `payment` (
+  `id` int(11) NOT NULL,
+  `date` int(12) NOT NULL,
+  `ammount` float NOT NULL,
+  `collectionId` int(11) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+
+-- --------------------------------------------------------
+
+--
 -- Table structure for table `sale`
 --
 
@@ -127,27 +141,7 @@ CREATE TABLE `sale` (
   `collectionId` int(11) NOT NULL,
   `scryfallId` varchar(100) NOT NULL,
   `price` float NOT NULL,
-  `percentage` float NOT NULL,
-  `quantity` int(11) NOT NULL,
-  `date` int(12) NOT NULL,
-  `conditionId` int(11) NOT NULL,
-  `languageId` int(11) NOT NULL,
-  `foil` int(11) DEFAULT NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `saleOLD`
---
-
-DROP TABLE IF EXISTS `saleOLD`;
-CREATE TABLE `saleOLD` (
-  `id` int(11) NOT NULL,
-  `collectionId` int(11) NOT NULL,
-  `scryfallId` int(11) NOT NULL,
-  `price` float NOT NULL,
-  `commissionPercent` float NOT NULL,
+  `percent` float NOT NULL,
   `quantity` int(11) NOT NULL,
   `date` int(12) NOT NULL,
   `conditionId` int(11) NOT NULL,
@@ -218,6 +212,13 @@ ALTER TABLE `login`
   ADD KEY `login_user` (`userId`);
 
 --
+-- Indexes for table `payment`
+--
+ALTER TABLE `payment`
+  ADD PRIMARY KEY (`id`),
+  ADD KEY `payment_collection` (`collectionId`);
+
+--
 -- Indexes for table `sale`
 --
 ALTER TABLE `sale`
@@ -225,13 +226,6 @@ ALTER TABLE `sale`
   ADD KEY `sale_collection` (`collectionId`),
   ADD KEY `sale_condition` (`conditionId`),
   ADD KEY `sale_language` (`languageId`);
-
---
--- Indexes for table `saleOLD`
---
-ALTER TABLE `saleOLD`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `sale_card` (`scryfallId`);
 
 --
 -- Indexes for table `user`
@@ -274,15 +268,15 @@ ALTER TABLE `login`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
--- AUTO_INCREMENT for table `sale`
+-- AUTO_INCREMENT for table `payment`
 --
-ALTER TABLE `sale`
+ALTER TABLE `payment`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
--- AUTO_INCREMENT for table `saleOLD`
+-- AUTO_INCREMENT for table `sale`
 --
-ALTER TABLE `saleOLD`
+ALTER TABLE `sale`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;
 
 --
@@ -314,6 +308,12 @@ ALTER TABLE `collection`
 --
 ALTER TABLE `login`
   ADD CONSTRAINT `login_user` FOREIGN KEY (`userId`) REFERENCES `user` (`id`);
+
+--
+-- Constraints for table `payment`
+--
+ALTER TABLE `payment`
+  ADD CONSTRAINT `payment_collection` FOREIGN KEY (`collectionId`) REFERENCES `collection` (`id`);
 
 --
 -- Constraints for table `sale`

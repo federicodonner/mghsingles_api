@@ -43,6 +43,25 @@ router.get("/", (req, res) => {
   });
 });
 
+// Get all collections
+router.get("/all", (req, res) => {
+  // Gets the userId from the authentication middleware
+  var userId = req.userId;
+  // Gets the card collection
+  let sql =
+    "SELECT o.id, u.name FROM collection o LEFT JOIN user u ON u.Id = o.userId ORDER BY u.name";
+  let query = db.query(sql, (err, collections) => {
+    if (err) {
+      throw err;
+    }
+    // If there are no results, return error
+    if (!collections.length) {
+      return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+    }
+    res.status(200).json(collections);
+  });
+});
+
 router.post(
   "/",
   [
