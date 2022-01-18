@@ -25,7 +25,12 @@ app.put("/user", authenticationMiddleware.authentication);
 app.put("/user/password", authenticationMiddleware.authentication);
 app.delete("/card/:cardId", authenticationMiddleware.authentication);
 app.post("/card", authenticationMiddleware.authentication);
-app.use("/payment", authenticationMiddleware.authentication);
+
+// Middleware for superuser authentication
+app.use("/admin", [
+  authenticationMiddleware.authentication,
+  authenticationMiddleware.superuser,
+]);
 
 // Routes for oauth
 var oauthRoute = require("./routes/oauth");
@@ -55,9 +60,9 @@ app.use("/card", cardRoute);
 var storeRoute = require("./routes/store");
 app.use("/store", storeRoute);
 
-// Routes for payment operations
-var paymentRoute = require("./routes/payment");
-app.use("/payment", paymentRoute);
+// Routes for admin operations
+var adminRoute = require("./routes/admin");
+app.use("/admin", adminRoute);
 
 app.listen("3001", () => {
   console.log("server started on port 3001");

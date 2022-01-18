@@ -6,7 +6,7 @@ const { check, validationResult, isNumeric } = require("express-validator");
 var messages = require("../data/messages");
 
 router.post(
-  "/",
+  "/payment",
   [check("collectionId").isNumeric(), check("ammount").isNumeric().isFloat()],
   (req, res) => {
     // Validates that the parameters are correct
