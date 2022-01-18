@@ -21,6 +21,7 @@ const messages = {
   SALE_NOT_ENOUGH_STOCK:
     "No hay stock suficiente de una de las cartas para la venta.",
   SALE_PROCESSED: "Venta procesada correctamente.",
+  USER_UPDATED: "Tus datos han sido actualizados",
 };
 
 module.exports = messages;

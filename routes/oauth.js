@@ -9,12 +9,6 @@ var utils = require("../utils/utils");
 
 // Validate the user and return the token
 router.post("/", (req, res) => {
-  // Validates that the parameters are correct
-  // const errors = validationResult(req);
-  // if (!errors.isEmpty()) {
-  //   // If one of them isn't, returns an error
-  //   return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-  // }
   // Loads the data into variables to use
   var username = req.body.username;
   var password = req.body.password;
@@ -24,7 +18,6 @@ router.post("/", (req, res) => {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
   // Verifies that the user exists
-  // HERE IT SHOULD CHECK THAT THE PASSWORD IS CORRECT
   let sql = "SELECT * FROM user WHERE username = '" + username + "'";
   let query = db.query(sql, (err, results) => {
     if (err) {

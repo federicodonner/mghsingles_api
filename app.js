@@ -21,6 +21,8 @@ var authenticationMiddleware = require("./middleware/authentication");
 app.use("/collection", authenticationMiddleware.authentication);
 app.use("/sale", authenticationMiddleware.authentication);
 app.use("/user/me", authenticationMiddleware.authentication);
+app.put("/user", authenticationMiddleware.authentication);
+app.put("/user/password", authenticationMiddleware.authentication);
 app.use("/card/:cardId", authenticationMiddleware.authentication);
 app.use("/payment", authenticationMiddleware.authentication);
 
