@@ -235,4 +235,16 @@ router.get("/me", (req, res) => {
   });
 });
 
+// Return payments and sales from collections
+router.get("/pendingpayments", (req, res) => {
+  let sql =
+    "SELECT u.name, one.collectionId, one.sales, one.commission, two.payments, (one.sales - one.commission - two.payments) AS 'outstanding' FROM (SELECT collectionId, SUM(price) AS 'sales', SUM(price*percent) AS 'commission' from sale GROUP BY collectionId) one LEFT JOIN (SELECT collectionId, SUM(ammount) AS 'payments' from payment GROUP BY collectionId) two ON one.collectionId = two.collectionId LEFT JOIN collection o ON one.collectionId = o.id LEFT JOIN user u ON o.userId = u.id";
+  let query = db.query(sql, (err, collections) => {
+    if (err) {
+      throw err;
+    }
+    return res.status(200).json(collections);
+  });
+});
+
 module.exports = router;
