@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: localhost:3306
--- Generation Time: Jan 14, 2022 at 10:45 PM
+-- Generation Time: Jan 26, 2022 at 02:48 AM
 -- Server version: 5.7.32
 -- PHP Version: 7.4.12
 
@@ -125,7 +125,7 @@ DROP TABLE IF EXISTS `payment`;
 CREATE TABLE `payment` (
   `id` int(11) NOT NULL,
   `date` int(12) NOT NULL,
-  `ammount` float NOT NULL,
+  `ammount` decimal(10,2) NOT NULL,
   `collectionId` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
 
@@ -140,8 +140,8 @@ CREATE TABLE `sale` (
   `id` int(11) NOT NULL,
   `collectionId` int(11) NOT NULL,
   `scryfallId` varchar(100) NOT NULL,
-  `price` float NOT NULL,
-  `percent` float NOT NULL,
+  `price` decimal(10,2) NOT NULL,
+  `percent` decimal(10,2) NOT NULL,
   `quantity` int(11) NOT NULL,
   `date` int(12) NOT NULL,
   `conditionId` int(11) NOT NULL,
