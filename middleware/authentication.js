@@ -63,24 +63,24 @@ async function authentication(req, res, next) {
 }
 
 // Authentication for admin endpoints
-// Verifies that the user is superuser
-function superuser(req, res, next) {
-  // Get the user id from the authentication middleware
-  var userId = req.userId;
+// Verifies that the player is superuser
+async function superuser(req, res, next) {
+  // Get the player id from the authentication middleware
+  var playerId = req.playerId;
 
   // Check if the user is a superuser
-  let sql = "SELECT * FROM user WHERE id = " + userId + " AND superuser = 1";
-  let query = db.query(sql, (err, users) => {
-    if (err) {
-      throw err;
-    }
-    // If the results is empty, it means that the user is not a superuser
-    if (!users.length) {
-      return res.status(403).json({ message: messages.UNAUTHORIZED });
-    }
-    // If the user exists and is a superuser, advance
-    next();
-  });
+  let sql =
+    "SELECT * FROM player WHERE id = " + playerId + " AND superuser = 1";
+  let players = await client.query(sql);
+  if (players.err) {
+    throw players.err;
+  }
+  // If the results is empty, it means that the user is not a superuser
+  if (!players.rows.length) {
+    return res.status(403).json({ message: messages.UNAUTHORIZED });
+  }
+  // If the user exists and is a superuser, advance
+  next();
 }
 
 module.exports = { authentication, superuser };
