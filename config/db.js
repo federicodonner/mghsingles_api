@@ -1,26 +1,21 @@
-require("dotenv").config();
-var mysql = require("mysql");
-var db;
+const { Client } = require("pg");
 
 function connectDatabase() {
-  if (!db) {
-    db = mysql.createConnection({
-      host: process.env.DB_HOST,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_DATABASE,
-      port: 8889,
-    });
+  const client = new Client({
+    user: "fefi",
+    host: "localhost",
+    database: "mghsingles",
+    password: "root",
+    port: 5432,
+  });
+  client.connect((err) => {
+    if (!err) {
+      console.log("Database connected");
+    } else {
+      console.log("Error connecting to database");
+    }
+  });
 
-    db.connect(function (err) {
-      if (!err) {
-        console.log("Database is connected!");
-      } else {
-        console.log("Error connecting database!");
-      }
-    });
-  }
-  return db;
+  return client;
 }
-
 module.exports = connectDatabase();
