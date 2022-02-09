@@ -22,6 +22,10 @@ const messages = {
     "No hay stock suficiente de una de las cartas para la venta.",
   SALE_PROCESSED: "Venta procesada correctamente.",
   USER_UPDATED: "Tus datos han sido actualizados",
+  REQUEST_TIMEOUT:
+    "La solicitud falló por demora. Intenta nuevamente más tarde.",
+  UPDATE_FINISHED_1: "Actualización terminada, ",
+  UPDATE_FINISHED_2: " cartas añadidas a la base de datos.",
 };
 
 module.exports = messages;

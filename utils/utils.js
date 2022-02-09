@@ -13,38 +13,20 @@ function generateToken(
 }
 
 // Access external URL
-// Receives res to be able to return errors if they happen
-function accessURL(url, successCallback, res) {
-  Promise.race([
-    // Generate two promies, one with the fecth and the other with the timeout
-    // the one that finishes first resolves
-    fetch(url, { method: "GET" }),
-    new Promise(function (resolve, reject) {
-      setTimeout(() => reject(new Error("request timeout")), 30000);
-    }),
-  ])
-    .then((response) => {
-      // When race resolves, it verifies the status of the API response
-      // If it's 200 or 201, it was successful
-      // Get the URI for the resource to get the new fetch.
-      if (response.status >= 200 && response.status < 300) {
-        response.json().then((data) => {
-          successCallback(data);
-        });
-      } else {
-        response.json().then((data) => {
-          data.status = response.status;
-          res.send(data);
-        });
-      }
-    })
-    .catch((e) => {
-      // var response = {
-      //   status: 500,
-      //   detail: texts.API_ERROR,
-      // };
-      res.send("error");
-    });
+async function accessURL(url) {
+  var fetchPromise = await fetch(url, { method: "GET", timeout: 30000 });
+  return fetchPromise;
 }
 
-module.exports = { generateToken, accessURL };
+async function accessURLDOS(url) {
+  console.log("estoy");
+  fetch(
+    "https://c2.scryfall.com/file/scryfall-bulk/default-cards/default-cards-20220209100300.json",
+    { method: "GET" }
+  ).then((response) => {
+    response.json().then((data) => {
+      console.log(data);
+    });
+  });
+}
+module.exports = { generateToken, accessURL, accessURLDOS };

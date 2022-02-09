@@ -211,14 +211,6 @@ ALTER TABLE ONLY public.sale
 
 
 --
--- Name: card card_cardgeneral; Type: FK CONSTRAINT; Schema: public; Owner: fefi
---
-
-ALTER TABLE ONLY public.card
-    ADD CONSTRAINT card_cardgeneral FOREIGN KEY (scryfallid) REFERENCES public.cardgeneral(scryfallid) NOT VALID;
-
-
---
 -- Name: card card_collection; Type: FK CONSTRAINT; Schema: public; Owner: fefi
 --
 
@@ -288,6 +280,42 @@ ALTER TABLE ONLY public.sale
 
 ALTER TABLE ONLY public.sale
     ADD CONSTRAINT sale_language FOREIGN KEY (languageid) REFERENCES public.cardlanguage(id) NOT VALID;
+
+
+--
+-- Data for Name: cardcondition; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardcondition (id, name) FROM stdin;
+1	NM
+2	EX
+3	VG
+4	G
+5	damaged
+\.
+
+
+--
+-- Data for Name: cardgeneral; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardgeneral (scryfallid, name, cardset, cardsetname, image) FROM stdin;
+\.
+
+
+--
+-- Data for Name: cardlanguage; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardlanguage (id, name) FROM stdin;
+1	Inglés
+2	Español
+3	Francés
+4	Portugués
+5	Alemán
+6	Japonés
+7	Chino
+\.
 
 
 --
