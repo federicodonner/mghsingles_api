@@ -1,8 +1,8 @@
 // Authentication middleware
-var db = require("../config/db.js");
+var client = require("../config/db.js");
 var messages = require("../data/messages.js");
 
-function authentication(req, res, next) {
+async function authentication(req, res, next) {
   // Verifies that the authorization header exists
   if (!req.header("authorization")) {
     return res.status(401).json({ message: messages.UNAUTHORIZED });
@@ -25,44 +25,41 @@ function authentication(req, res, next) {
     "SELECT * FROM login WHERE token = '" +
     loginToken +
     "' ORDER BY date DESC LIMIT 1";
-  let query = db.query(sql, (err, tokenResults) => {
-    if (err) {
-      throw err;
-    }
-    if (!tokenResults.length) {
-      return res.status(403).json({ message: messages.UNAUTHORIZED });
-    }
-    // If the token is found, verifies if the user exists
-    userId = tokenResults[0].userId;
-    sql = "SELECT * FROM user WHERE id = " + userId;
-    query = db.query(sql, (err, userResults) => {
-      if (err) {
-        throw err;
-      }
-      // If the user doesn't exist, exit with error
-      if (!userResults.length) {
-        return res.status(401).json({ message: messages.UNAUTHORIZED });
-      }
-      // If the user exists, verifies if it's the latest login
-      sql =
-        "SELECT token FROM login WHERE userId = " +
-        userId +
-        " ORDER BY date DESC LIMIT 1";
-      query = db.query(sql, (err, results) => {
-        if (err) {
-          throw err;
-        }
-        // Verifies that the token in the last user login is the same
-        if (results[0].token !== loginToken) {
-          return res.status(403).json({ message: messages.UNAUTHORIZED });
-        }
-        // If the login is correct and the user is found, the id
-        // is passed to the route from the middleware
-        req.userId = userId;
-        next();
-      });
-    });
-  });
+  let tokenResults = await client.query(sql);
+  if (tokenResults.err) {
+    throw tokenResults.err;
+  }
+  if (!tokenResults.rows.length) {
+    return res.status(403).json({ message: messages.UNAUTHORIZED });
+  }
+  // If the token is found, verifies if the player exists
+  playerId = tokenResults.rows[0].playerid;
+  sql = "SELECT * FROM player WHERE id = " + playerId;
+  let playerResults = await client.query(sql);
+  if (playerResults.err) {
+    throw playerResults.err;
+  }
+  // If the player doesn't exist, exit with error
+  if (!playerResults.rows.length) {
+    return res.status(401).json({ message: messages.UNAUTHORIZED });
+  }
+  // If the player exists, verifies if it's the latest login
+  sql =
+    "SELECT token FROM login WHERE playerid = " +
+    playerId +
+    " ORDER BY date DESC LIMIT 1";
+  let results = await client.query(sql);
+  if (results.err) {
+    throw results.err;
+  }
+  // Verifies that the token in the last player login is the same
+  if (results.rows[0].token !== loginToken) {
+    return res.status(403).json({ message: messages.UNAUTHORIZED });
+  }
+  // If the login is correct and the player is found, the id
+  // is passed to the route from the middleware
+  req.playerId = playerId;
+  next();
 }
 
 // Authentication for admin endpoints

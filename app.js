@@ -1,5 +1,4 @@
 const express = require("express");
-const mysql = require("mysql");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 
@@ -20,9 +19,9 @@ app.use(bodyParser.json());
 var authenticationMiddleware = require("./middleware/authentication");
 app.use("/collection", authenticationMiddleware.authentication);
 app.use("/sale", authenticationMiddleware.authentication);
-app.use("/user/me", authenticationMiddleware.authentication);
-app.put("/user", authenticationMiddleware.authentication);
-app.put("/user/password", authenticationMiddleware.authentication);
+app.use("/player/me", authenticationMiddleware.authentication);
+app.put("/player", authenticationMiddleware.authentication);
+app.put("/player/password", authenticationMiddleware.authentication);
 app.delete("/card/:cardId", authenticationMiddleware.authentication);
 app.post("/card", authenticationMiddleware.authentication);
 
@@ -41,8 +40,8 @@ var bulkRoute = require("./routes/processBulk");
 app.use("/bulk", bulkRoute);
 
 // Routes for user operations
-var userRoute = require("./routes/user");
-app.use("/user", userRoute);
+var playerRoute = require("./routes/player");
+app.use("/player", playerRoute);
 
 // Routes for collection operations
 var collectionRoute = require("./routes/collection");
