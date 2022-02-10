@@ -119,7 +119,12 @@ router.put(
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       // If one of them isn't, returns an error
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      // Verifies if the error is the email
+      if (errors.errors[0].param === "email") {
+        return res.status(400).json({ message: messages.EMAIL_ERROR });
+      } else {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
     }
     // Get the userId from the authentication middleware
     var playerId = req.playerId;
