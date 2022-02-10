@@ -25,7 +25,12 @@ router.post(
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       // If one of them isn't, returns an error
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      // Verifies if the error is the email
+      if (errors.errors[0].param === "email") {
+        return res.status(400).json({ message: messages.EMAIL_ERROR });
+      } else {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
     }
     // Loads the data into variables to use
     var username = req.body.username;
@@ -77,7 +82,9 @@ router.post(
     var playerId = results.rows[0].id;
 
     sql =
-      "INSERT INTO collection (playerid, active) VALUES (" + playerId + ",1)";
+      "INSERT INTO collection (playerid, active, percent) VALUES (" +
+      playerId +
+      ",1, 0.3)";
     var collection = await client.query(sql);
     if (collection.err) {
       throw collection.err;
