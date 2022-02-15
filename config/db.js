@@ -2,11 +2,11 @@ const { Client } = require("pg");
 
 function connectDatabase() {
   const client = new Client({
-    user: "fefi",
-    host: "localhost",
-    database: "mghsingles",
-    password: "root",
-    port: 5432,
+    user: process.env.DB_USER,
+    host: process.env.DB_HOST,
+    database: process.env.DB_DATABASE,
+    password: process.env.DBPASSWORD,
+    port: process.env.DB_PORT,
   });
   client.connect((err) => {
     if (!err) {
