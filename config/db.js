@@ -1,6 +1,13 @@
 const { Client } = require("pg");
 
 function connectDatabase() {
+  console.log(
+    process.env.DB_USER,
+    process.env.DB_HOST,
+    process.env.DB_DATABASE,
+    process.env.DBPASSWORD,
+    process.env.DB_PORT
+  );
   const client = new Client({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
