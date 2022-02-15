@@ -1,12 +1,12 @@
 const { Client } = require("pg");
 
 function connectDatabase() {
+  console.log(process.env.DATABASE_URL);
   const client = new Client({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_DATABASE,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT,
+    connectionString: process.env.DATABASE_URL,
+    ssl: {
+      rejectUnauthorized: false,
+    },
   });
   client.connect((err) => {
     if (!err) {
