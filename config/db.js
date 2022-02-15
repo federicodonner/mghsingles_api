@@ -1,13 +1,6 @@
 const { Client } = require("pg");
 
 function connectDatabase() {
-  console.log(
-    process.env.DB_USER,
-    process.env.DB_HOST,
-    process.env.DB_DATABASE,
-    process.env.DB_PASSWORD,
-    process.env.DB_PORT
-  );
   const client = new Client({
     user: process.env.DB_USER,
     host: process.env.DB_HOST,
@@ -19,7 +12,7 @@ function connectDatabase() {
     if (!err) {
       console.log("Database connected");
     } else {
-      console.log("Error connecting to database");
+      console.log("Error connecting to database", err);
     }
   });
 
