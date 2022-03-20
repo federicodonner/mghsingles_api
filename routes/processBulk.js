@@ -18,6 +18,7 @@ router.get("/", async (req, res) => {
     bulkLibraries.data.forEach((bulkPack) => {
       if (bulkPack.type === "default_cards") {
         bulkDataURL = bulkPack.download_uri;
+        console.log(bulkDataURL);
       }
     });
     // Once it has the unique_artwork URL, it accesses it to find the data
@@ -33,7 +34,7 @@ router.get("/", async (req, res) => {
     // numberOfCards allows the endpoint to report on how many cards it added
     let numberOfCards = 0;
     // It's going to process cards in batches of 1000
-    let batchNumber = 5000;
+    let batchNumber = 1000;
     let maxIndexToInsert = batchNumber;
     let scryfallId;
     let name;
@@ -42,6 +43,7 @@ router.get("/", async (req, res) => {
     let image;
     let donePassing = true;
     while (donePassing) {
+      console.log("this is a pass");
       sql =
         "INSERT INTO cardgeneral (scryfallid, name, cardset, cardsetname, image) VALUES ";
       for (
@@ -87,6 +89,7 @@ router.get("/", async (req, res) => {
       if (results.err) {
         throw results.err;
       }
+      // Send the cards to the endpoint
       // When it's the last pass, stop iterating
       if (maxIndexToInsert > data.length) {
         donePassing = false;
@@ -105,4 +108,46 @@ router.get("/", async (req, res) => {
   }
 });
 
+// Add cards to cardgeneral
+router.post("/", async (req, res) => {
+  // Get cards
+  var cardsToAdd = req.body.cardsToAdd;
+  // Check if the user wants to clear the database
+  // should be set on the first call of the database update
+
+  if (req.body.deleteDatabase) {
+    console.log("deleteDatabase");
+    sql = "TRUNCATE TABLE cardgeneral";
+    let resultsDropTable = await client.query(sql);
+  }
+
+  sql =
+    "INSERT INTO cardgeneral (scryfallid, name, cardset, cardsetname, image) VALUES ";
+  cardsToAdd.forEach((cardToAdd, index) => {
+    sql =
+      sql +
+      "('" +
+      cardToAdd.scryfallid +
+      "','" +
+      cardToAdd.name +
+      "','" +
+      cardToAdd.cardset +
+      "','" +
+      cardToAdd.cardsetname +
+      "','" +
+      cardToAdd.image +
+      "')";
+    if (index != cardsToAdd.length - 1) {
+      sql = sql + ",";
+    }
+  });
+  // cardsToAdd.forEach((card, index) => {
+  //   console.log(card);
+  // });
+  let results = await client.query(sql);
+  if (results.err) {
+    throw results.err;
+  }
+  res.status(200).json({ message: "ok" });
+});
 module.exports = router;
