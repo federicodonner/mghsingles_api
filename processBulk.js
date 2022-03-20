@@ -5,7 +5,7 @@ var fetch = require("cross-fetch");
 // looking for the URL of the data bulk
 async function getScryfallCollectionURL() {
   const scryfallUrl = "https://api.scryfall.com/bulk-data";
-  const apiUrl = "http://localhost:3001/bulk";
+  const apiUrl = "http://mghsingles.herokuapp.com/bulk";
   const batchNumber = 250;
   let maxIndexToInsert = batchNumber;
   let addedCards = 0;
