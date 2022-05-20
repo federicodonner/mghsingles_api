@@ -2,8 +2,8 @@
 -- PostgreSQL database dump
 --
 
--- Dumped from database version 14.1
--- Dumped by pg_dump version 14.1
+-- Dumped from database version 14.2
+-- Dumped by pg_dump version 14.3
 
 SET statement_timeout = 0;
 SET lock_timeout = 0;
@@ -25,12 +25,12 @@ SET default_table_access_method = heap;
 --
 
 CREATE TABLE public.card (
-    id serial NOT NULL,
+    id integer NOT NULL,
     scryfallid character varying(50),
     conditionid smallint NOT NULL,
     languageid smallint NOT NULL,
     quantity integer NOT NULL,
-    collectionid serial NOT NULL,
+    collectionid integer NOT NULL,
     foil smallint NOT NULL
 );
 
@@ -38,16 +38,82 @@ CREATE TABLE public.card (
 ALTER TABLE public.card OWNER TO fefi;
 
 --
+-- Name: card_collectionid_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.card_collectionid_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.card_collectionid_seq OWNER TO fefi;
+
+--
+-- Name: card_collectionid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.card_collectionid_seq OWNED BY public.card.collectionid;
+
+
+--
+-- Name: card_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.card_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.card_id_seq OWNER TO fefi;
+
+--
+-- Name: card_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.card_id_seq OWNED BY public.card.id;
+
+
+--
 -- Name: cardcondition; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.cardcondition (
-    id serial NOT NULL,
+    id integer NOT NULL,
     name character varying(20) NOT NULL
 );
 
 
 ALTER TABLE public.cardcondition OWNER TO fefi;
+
+--
+-- Name: cardcondition_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.cardcondition_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.cardcondition_id_seq OWNER TO fefi;
+
+--
+-- Name: cardcondition_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.cardcondition_id_seq OWNED BY public.cardcondition.id;
+
 
 --
 -- Name: cardgeneral; Type: TABLE; Schema: public; Owner: fefi
@@ -69,7 +135,7 @@ ALTER TABLE public.cardgeneral OWNER TO fefi;
 --
 
 CREATE TABLE public.cardlanguage (
-    id serial NOT NULL,
+    id integer NOT NULL,
     name character varying(20) NOT NULL
 );
 
@@ -77,11 +143,70 @@ CREATE TABLE public.cardlanguage (
 ALTER TABLE public.cardlanguage OWNER TO fefi;
 
 --
+-- Name: cardlanguage_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.cardlanguage_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.cardlanguage_id_seq OWNER TO fefi;
+
+--
+-- Name: cardlanguage_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.cardlanguage_id_seq OWNED BY public.cardlanguage.id;
+
+
+--
+-- Name: cardset; Type: TABLE; Schema: public; Owner: fefi
+--
+
+CREATE TABLE public.cardset (
+    id integer NOT NULL,
+    cardsetname character varying(200),
+    releasedate character varying(20),
+    iconsvguri character varying(200),
+    cardset character varying(10)
+);
+
+
+ALTER TABLE public.cardset OWNER TO fefi;
+
+--
+-- Name: cardset_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.cardset_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.cardset_id_seq OWNER TO fefi;
+
+--
+-- Name: cardset_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.cardset_id_seq OWNED BY public.cardset.id;
+
+
+--
 -- Name: collection; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.collection (
-    id serial NOT NULL,
+    id integer NOT NULL,
     playerid integer NOT NULL,
     active integer,
     percent double precision
@@ -91,12 +216,34 @@ CREATE TABLE public.collection (
 ALTER TABLE public.collection OWNER TO fefi;
 
 --
+-- Name: collection_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.collection_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.collection_id_seq OWNER TO fefi;
+
+--
+-- Name: collection_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.collection_id_seq OWNED BY public.collection.id;
+
+
+--
 -- Name: login; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.login (
-    id serial NOT NULL,
-    playerid serial NOT NULL,
+    id integer NOT NULL,
+    playerid integer NOT NULL,
     token character varying(50) NOT NULL,
     date integer NOT NULL
 );
@@ -105,11 +252,55 @@ CREATE TABLE public.login (
 ALTER TABLE public.login OWNER TO fefi;
 
 --
+-- Name: login_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.login_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.login_id_seq OWNER TO fefi;
+
+--
+-- Name: login_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.login_id_seq OWNED BY public.login.id;
+
+
+--
+-- Name: login_playerid_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.login_playerid_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.login_playerid_seq OWNER TO fefi;
+
+--
+-- Name: login_playerid_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.login_playerid_seq OWNED BY public.login.playerid;
+
+
+--
 -- Name: payment; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.payment (
-    id serial NOT NULL,
+    id integer NOT NULL,
     date integer NOT NULL,
     ammount numeric(10,2) NOT NULL,
     collectionid integer NOT NULL
@@ -119,11 +310,33 @@ CREATE TABLE public.payment (
 ALTER TABLE public.payment OWNER TO fefi;
 
 --
+-- Name: payment_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.payment_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.payment_id_seq OWNER TO fefi;
+
+--
+-- Name: payment_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.payment_id_seq OWNED BY public.payment.id;
+
+
+--
 -- Name: player; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.player (
-    id serial NOT NULL,
+    id integer NOT NULL,
     username character varying(50) NOT NULL,
     name character varying(50) NOT NULL,
     email character varying(200) NOT NULL,
@@ -135,11 +348,33 @@ CREATE TABLE public.player (
 ALTER TABLE public.player OWNER TO fefi;
 
 --
+-- Name: player_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.player_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.player_id_seq OWNER TO fefi;
+
+--
+-- Name: player_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.player_id_seq OWNED BY public.player.id;
+
+
+--
 -- Name: sale; Type: TABLE; Schema: public; Owner: fefi
 --
 
 CREATE TABLE public.sale (
-    id serial NOT NULL,
+    id integer NOT NULL,
     collectionid integer NOT NULL,
     scryfallid character varying(100) NOT NULL,
     price numeric(10,2) NOT NULL,
@@ -153,6 +388,274 @@ CREATE TABLE public.sale (
 
 
 ALTER TABLE public.sale OWNER TO fefi;
+
+--
+-- Name: sale_id_seq; Type: SEQUENCE; Schema: public; Owner: fefi
+--
+
+CREATE SEQUENCE public.sale_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER TABLE public.sale_id_seq OWNER TO fefi;
+
+--
+-- Name: sale_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: fefi
+--
+
+ALTER SEQUENCE public.sale_id_seq OWNED BY public.sale.id;
+
+
+--
+-- Name: card id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.card ALTER COLUMN id SET DEFAULT nextval('public.card_id_seq'::regclass);
+
+
+--
+-- Name: card collectionid; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.card ALTER COLUMN collectionid SET DEFAULT nextval('public.card_collectionid_seq'::regclass);
+
+
+--
+-- Name: cardcondition id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.cardcondition ALTER COLUMN id SET DEFAULT nextval('public.cardcondition_id_seq'::regclass);
+
+
+--
+-- Name: cardlanguage id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.cardlanguage ALTER COLUMN id SET DEFAULT nextval('public.cardlanguage_id_seq'::regclass);
+
+
+--
+-- Name: cardset id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.cardset ALTER COLUMN id SET DEFAULT nextval('public.cardset_id_seq'::regclass);
+
+
+--
+-- Name: collection id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.collection ALTER COLUMN id SET DEFAULT nextval('public.collection_id_seq'::regclass);
+
+
+--
+-- Name: login id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.login ALTER COLUMN id SET DEFAULT nextval('public.login_id_seq'::regclass);
+
+
+--
+-- Name: login playerid; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.login ALTER COLUMN playerid SET DEFAULT nextval('public.login_playerid_seq'::regclass);
+
+
+--
+-- Name: payment id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.payment ALTER COLUMN id SET DEFAULT nextval('public.payment_id_seq'::regclass);
+
+
+--
+-- Name: player id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.player ALTER COLUMN id SET DEFAULT nextval('public.player_id_seq'::regclass);
+
+
+--
+-- Name: sale id; Type: DEFAULT; Schema: public; Owner: fefi
+--
+
+ALTER TABLE ONLY public.sale ALTER COLUMN id SET DEFAULT nextval('public.sale_id_seq'::regclass);
+
+
+--
+-- Data for Name: card; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.card (id, scryfallid, conditionid, languageid, quantity, collectionid, foil) FROM stdin;
+\.
+
+
+--
+-- Data for Name: cardcondition; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardcondition (id, name) FROM stdin;
+1	NM
+2	EX
+3	VG
+4	G
+5	damaged
+\.
+
+
+--
+-- Data for Name: cardgeneral; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardgeneral (scryfallid, name, cardset, cardsetname, image) FROM stdin;
+\.
+
+
+--
+-- Data for Name: cardlanguage; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardlanguage (id, name) FROM stdin;
+1	Inglés
+2	Español
+3	Francés
+4	Portugués
+5	Alemán
+6	Japonés
+7	Chino
+\.
+
+
+--
+-- Data for Name: cardset; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.cardset (id, cardsetname, releasedate, iconsvguri, cardset) FROM stdin;
+\.
+
+
+--
+-- Data for Name: collection; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.collection (id, playerid, active, percent) FROM stdin;
+\.
+
+
+--
+-- Data for Name: login; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.login (id, playerid, token, date) FROM stdin;
+\.
+
+
+--
+-- Data for Name: payment; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.payment (id, date, ammount, collectionid) FROM stdin;
+\.
+
+
+--
+-- Data for Name: player; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.player (id, username, name, email, superuser, passwordhash) FROM stdin;
+\.
+
+
+--
+-- Data for Name: sale; Type: TABLE DATA; Schema: public; Owner: fefi
+--
+
+COPY public.sale (id, collectionid, scryfallid, price, percent, quantity, date, conditionid, languageid, foil) FROM stdin;
+\.
+
+
+--
+-- Name: card_collectionid_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.card_collectionid_seq', 1, false);
+
+
+--
+-- Name: card_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.card_id_seq', 1, false);
+
+
+--
+-- Name: cardcondition_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.cardcondition_id_seq', 1, false);
+
+
+--
+-- Name: cardlanguage_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.cardlanguage_id_seq', 1, false);
+
+
+--
+-- Name: cardset_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.cardset_id_seq', 1, false);
+
+
+--
+-- Name: collection_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.collection_id_seq', 1, true);
+
+
+--
+-- Name: login_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.login_id_seq', 3, true);
+
+
+--
+-- Name: login_playerid_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.login_playerid_seq', 1, false);
+
+
+--
+-- Name: payment_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.payment_id_seq', 1, false);
+
+
+--
+-- Name: player_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.player_id_seq', 1, true);
+
+
+--
+-- Name: sale_id_seq; Type: SEQUENCE SET; Schema: public; Owner: fefi
+--
+
+SELECT pg_catalog.setval('public.sale_id_seq', 1, false);
+
 
 --
 -- Name: card card_pkey; Type: CONSTRAINT; Schema: public; Owner: fefi
@@ -283,41 +786,6 @@ ALTER TABLE ONLY public.sale
 
 
 --
--- Data for Name: cardcondition; Type: TABLE DATA; Schema: public; Owner: fefi
---
-
-COPY public.cardcondition (id, name) FROM stdin;
-1	NM
-2	EX
-3	VG
-4	G
-5	damaged
-\.
-
-
---
--- Data for Name: cardgeneral; Type: TABLE DATA; Schema: public; Owner: fefi
---
-
-COPY public.cardgeneral (scryfallid, name, cardset, cardsetname, image) FROM stdin;
-\.
-
-
---
--- Data for Name: cardlanguage; Type: TABLE DATA; Schema: public; Owner: fefi
---
-
-COPY public.cardlanguage (id, name) FROM stdin;
-1	Inglés
-2	Español
-3	Francés
-4	Portugués
-5	Alemán
-6	Japonés
-7	Chino
-\.
-
-
---
 -- PostgreSQL database dump complete
 --
+
