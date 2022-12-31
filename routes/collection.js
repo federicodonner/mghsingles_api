@@ -28,7 +28,7 @@ router.get("/", async (req, res) => {
   // If there is a collection, retrieve the cards.
   var collectionId = collections.rows[0].id;
   sql =
-    "SELECT c.id, c.quantity, c.foil,  cg.name, cg.cardset, cg.cardsetname, cg.image, o.name AS condition, l.name AS language FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid LEFT JOIN cardcondition o ON c.conditionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id WHERE collectionid = " +
+    "SELECT c.id, c.quantity, c.variant,  cg.name, cg.cardset, cg.cardsetname, cg.image, o.name AS condition, l.name AS language FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid LEFT JOIN cardcondition o ON c.conditionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id WHERE collectionid = " +
     collectionId +
     " ORDER BY cg.name";
   let cards = await client.query(sql);

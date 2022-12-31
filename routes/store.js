@@ -14,7 +14,7 @@ router.get("/:page", [check("page").isNumeric()], async (req, res) => {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
   var page = req.params.page;
-  let pageSize = 200;
+  let pageSize = 50;
 
   // Return how many cards there are for the UI to show
   let sql =
@@ -29,8 +29,8 @@ router.get("/:page", [check("page").isNumeric()], async (req, res) => {
   };
 
   // Get the cards from active collections
-  sql =
-    "SELECT c.id, c.scryfallid, c.quantity, c.foil, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.image FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid WHERE o.active = 1 ORDER BY g.name";
+  const hola = "hola";
+  sql = `SELECT c.id, c.scryfallid, c.quantity, c.variant, c.price, CONCAT('https://','${process.env.CARDKINGDOM_URL}', c.ckuri) AS ckurl, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.image FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid WHERE o.active = 1 ORDER BY g.name`;
   let cards = await client.query(sql);
   if (cards.err) {
     throw cards.err;
@@ -77,16 +77,8 @@ router.get(
       throw quantity.err;
     }
 
-    let objectToReturn = {
-      numberOfCards: quantity.rows[0]["count"],
-      numberOfPages: Math.ceil(quantity.rows[0]["count"] / pageSize),
-    };
-
     // Get the cards from active collections
-    sql =
-      "SELECT c.id, c.scryfallid, c.quantity, c.foil, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.cardSet, g.image, o.id AS collection, p.name AS player, o.percent FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid LEFT JOIN player p ON o.playerid = p.id WHERE o.active = 1 AND LOWER(g.name) like LOWER('%" +
-      cardName +
-      "%') ORDER BY g.name";
+    sql = `SELECT c.id, c.scryfallid, c.quantity, c.variant, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.cardSet, g.image, o.id AS collection, p.name AS player, o.percent FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid LEFT JOIN player p ON o.playerid = p.id WHERE o.active = 1 AND LOWER(g.name) like LOWER('%${cardName}%') ORDER BY g.name`;
     let cards = await client.query(sql);
     if (cards.err) {
       throw cards.err;
@@ -95,6 +87,12 @@ router.get(
     if (!cards.rows.length) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
+
+    let objectToReturn = {
+      numberOfCards: cards.rows.length,
+      numberOfPages: Math.ceil(cards.rows.length / pageSize),
+    };
+
     // Return the results
     objectToReturn.cards = cards.rows;
     return res.status(200).json(objectToReturn);

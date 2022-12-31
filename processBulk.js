@@ -1,6 +1,25 @@
 const http = require("http");
 const https = require("https");
 var fetch = require("cross-fetch");
+
+// Function used in the color sorting to return them in UWBRG order
+function sortByWUBRG(a, b) {
+  if (a === b) {
+    return 0;
+  }
+
+  if (
+    a === "W" ||
+    (a === "U" && b !== "W") ||
+    (a === "B" && b !== "W" && b !== "U") ||
+    (a === "R" && b !== "W" && b !== "U" && b !== "B")
+  ) {
+    return -1;
+  }
+
+  return 1;
+}
+
 // First, the route receives the request and pings Scryfall
 // looking for the URL of the data bulk
 async function getScryfallCollectionURL() {
@@ -58,6 +77,16 @@ async function getScryfallCollectionURL() {
         // substitute it by exactly Secret Lair
         if (setToAdd.name.indexOf("Secret Lair") !== -1) {
           cardsetname = "Secret Lair";
+        } else if (setToAdd.name === "Limited Edition Alpha") {
+          cardsetname = "Alpha";
+        } else if (setToAdd.name === "Limited Edition Beta") {
+          cardsetname = "Beta";
+        } else if (setToAdd.name === "Unlimited Edition") {
+          cardsetname = "Unlimited";
+        } else if (setToAdd.name === "Revised Edition") {
+          cardsetname = "3rd Edition";
+        } else if (setToAdd.name === "Mystery Booster") {
+          cardsetname = "Mystery Booster The List";
         } else {
           cardsetname = setToAdd.name;
           cardsetname = cardsetname.replace(/"/g, "");
@@ -70,6 +99,19 @@ async function getScryfallCollectionURL() {
         // push the set into the array
         setsToAdd.push({ cardsetname, releasedate, iconsvguri, cardset });
       }
+      // Calculate if this is the last iteration
+
+      donePassing = maxIndexToInsert >= setsInformation.length;
+      // If it is, add Strixhaven Mystical Archive Japanese as set
+      if (donePassing) {
+        setsToAdd.push({
+          cardsetname: "Strixhaven Mystical Archive JPN",
+          releasedate: "2021-04-23",
+          iconsvguri: null,
+          cardset: "staj",
+        });
+      }
+      // After all the sets are pushed, add Mystical Archive Japanese
       if (setsToAdd.length) {
         // Send the sets to the API
         const responseUpload = await fetch(apiUrl, {
@@ -84,7 +126,6 @@ async function getScryfallCollectionURL() {
           },
         });
 
-        donePassing = maxIndexToInsert >= setsInformation.length;
         addedSets = addedSets + setsToAdd.length;
         maxIndexToInsert = maxIndexToInsert + batchNumber;
         if (responseUpload.status === 200) {
@@ -137,6 +178,9 @@ async function getScryfallCollectionURL() {
     let extendedart;
     let retroframe;
     let releasedatyear;
+    let color;
+    let rarity;
+    let collectornumber;
     donePassing = false;
     //
     while (!donePassing) {
@@ -154,6 +198,8 @@ async function getScryfallCollectionURL() {
         phyrexian = 0;
         extendedart = 0;
         retroframe = 0;
+        boxtopper = 0;
+        collectornumber = 0;
         // If the card is digital, ignore it
         if (!cardToAdd.digital) {
           // Load the card's data into variables
@@ -164,11 +210,37 @@ async function getScryfallCollectionURL() {
           if (cardToAdd.set_name.indexOf("Secret Lair") !== -1) {
             cardsetname = "Secret Lair";
             cardset = "sld";
+          } else if (cardToAdd.set_name === "Limited Edition Alpha") {
+            cardsetname = "Alpha";
+            cardset = "lea";
+          } else if (cardToAdd.set_name === "Limited Edition Beta") {
+            cardsetname = "Beta";
+            cardset = "leb";
+          } else if (cardToAdd.set_name === "Unlimited Edition") {
+            cardsetname = "Unlimited";
+            cardset = "2ed";
+          } else if (cardToAdd.set_name === "Revised Edition") {
+            cardsetname = "3rd Edition";
+            cardset = "3ed";
+          } else if (
+            cardToAdd.set_name === "Strixhaven Mystical Archive" &&
+            cardToAdd.lang === "ja"
+          ) {
+            cardsetname = "Strixhaven Mystical Archive JPN";
+            cardset = "staj";
+          } else if (cardToAdd.set_name === "Mystery Booster") {
+            cardsetname = "Mystery Booster The List";
+            cardset = cardToAdd.set;
           } else {
             cardsetname = cardToAdd.set_name.replace(/'/g, "");
             cardset = cardToAdd.set;
           }
           releasedatyear = cardToAdd.released_at.match(/^\d{4}/);
+          if (cardToAdd.colors) {
+            color = cardToAdd.colors.sort(sortByWUBRG).join().replace(/,/g, "");
+          }
+          rarity = cardToAdd.rarity;
+          collectornumber = cardToAdd.collector_number;
           // If the card has multiple faces, load the front one as the image
           if (cardToAdd.image_uris?.normal) {
             image = cardToAdd.image_uris?.normal;
@@ -200,6 +272,12 @@ async function getScryfallCollectionURL() {
           if (cardToAdd.frame === "1997") {
             retroframe = 1;
           }
+          if (
+            cardToAdd.promo_types &&
+            cardToAdd?.promo_types.indexOf("boxtopper") !== -1
+          ) {
+            boxtopper = 1;
+          }
           // Push the card into the array
           cardsToAdd.push({
             scryfallid,
@@ -213,6 +291,10 @@ async function getScryfallCollectionURL() {
             phyrexian,
             extendedart,
             retroframe,
+            boxtopper,
+            color,
+            rarity,
+            collectornumber,
           });
         }
       }

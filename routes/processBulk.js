@@ -1,50 +1,37 @@
 var express = require("express");
 var router = express.Router();
 var client = require("../config/db");
-var utils = require("../utils/utils");
-var messages = require("../data/messages");
 
 // Add cards to cardgeneral
 router.post("/", async (req, res) => {
   // Determines if posting sets or cards
-  if(req.body.sets){
+  if (req.body.sets) {
+    // Get sets
+    var setsToAdd = req.body.setsToAdd;
+    // Check if the user wants to clear the database
+    // should be set on the first call of the database update
 
-  // Get sets
-  var setsToAdd = req.body.setsToAdd;
-  // Check if the user wants to clear the database
-  // should be set on the first call of the database update
-
-  if (req.body.deleteDatabase) {
-    sql = "TRUNCATE TABLE cardset";
-    let resultsDropTable = await client.query(sql);
-  }
-
-  sql =
-    "INSERT INTO cardset (cardsetname, releasedate, iconsvguri, cardset) VALUES ";
-  setsToAdd.forEach((setToAdd, index) => {
-    sql =
-      sql +
-      "('" +
-      setToAdd.cardsetname +
-      "','" +
-      setToAdd.releasedate +
-      "','" +
-      setToAdd.iconsvguri +
-      "','" +
-      setToAdd.cardset +
-      "')";
-    if (index != setsToAdd.length - 1) {
-      sql = sql + ",";
+    if (req.body.deleteDatabase) {
+      sql = "TRUNCATE TABLE cardset";
+      let resultsDropTable = await client.query(sql);
     }
-  });
 
-  let results = await client.query(sql);
-  if (results.err) {
-    console.log('error', sql);
-    // throw results.err;
-  }
+    sql =
+      "INSERT INTO cardset (cardsetname, releasedate, iconsvguri, cardset) VALUES ";
+    setsToAdd.forEach((setToAdd, index) => {
+      sql = `${sql}('${setToAdd.cardsetname}','${setToAdd.releasedate}','${setToAdd.iconsvguri}','${setToAdd.cardset}')`;
+      if (index != setsToAdd.length - 1) {
+        sql = sql + ",";
+      }
+    });
 
-    return res.status(200).json({message:'ok'})
+    let results = await client.query(sql);
+    if (results.err) {
+      console.log("error", sql);
+      // throw results.err;
+    }
+
+    return res.status(200).json({ message: "ok" });
   }
 
   // Get cards
@@ -56,23 +43,10 @@ router.post("/", async (req, res) => {
     sql = "TRUNCATE TABLE cardgeneral";
     let resultsDropTable = await client.query(sql);
   }
-
   sql =
-    "INSERT INTO cardgeneral (scryfallid, name, cardset, cardsetname, image) VALUES ";
+    "INSERT INTO cardgeneral (scryfallid, name, cardset, cardsetname, image, releasedatyear, borderless, showcase, phyrexian, extendedart, retroframe,boxtopper, color, rarity, collectornumber) VALUES ";
   cardsToAdd.forEach((cardToAdd, index) => {
-    sql =
-      sql +
-      "('" +
-      cardToAdd.scryfallid +
-      "','" +
-      cardToAdd.name +
-      "','" +
-      cardToAdd.cardset +
-      "','" +
-      cardToAdd.cardsetname +
-      "','" +
-      cardToAdd.image +
-      "')";
+    sql = `${sql}('${cardToAdd.scryfallid}','${cardToAdd.name}','${cardToAdd.cardset}','${cardToAdd.cardsetname}','${cardToAdd.image}','${cardToAdd.releasedatyear}','${cardToAdd.borderless}','${cardToAdd.showcase}','${cardToAdd.phyrexian}','${cardToAdd.extendedart}','${cardToAdd.retroframe}', '${cardToAdd.boxtopper}', '${cardToAdd.color}', '${cardToAdd.rarity}','${cardToAdd.collectornumber}')`;
     if (index != cardsToAdd.length - 1) {
       sql = sql + ",";
     }
@@ -80,12 +54,11 @@ router.post("/", async (req, res) => {
 
   let results = await client.query(sql);
   if (results.err) {
-    console.log('eac');
+    console.log("eac");
     // throw results.err;
   }
 
- return res.status(200).json({ message: "ok" });
-
+  return res.status(200).json({ message: "ok" });
 });
 
 module.exports = router;
