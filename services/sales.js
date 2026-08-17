@@ -51,3 +51,26 @@ export async function recordSale(tx, { card, quantity, price, date }) {
 }
 
 export default recordSale;
+
+// Take `quantity` copies of `card` out of stock WITHOUT recording a sale.
+//
+// Used when a customer collects a card from their own consigned collection:
+// the card leaves the shop, but there is no buyer, no money and nobody to pay
+// out. Writing a sale here would credit the owner for buying their own card.
+export async function recordWithdrawal(tx, { card, quantity }) {
+  if (quantity >= card.quantity) {
+    await tx.cardplacement.deleteMany({ where: { cardid: card.id } });
+    await tx.card.delete({ where: { id: card.id } });
+    return;
+  }
+  const remaining = card.quantity - quantity;
+  await tx.card.update({
+    where: { id: card.id },
+    data: { quantity: remaining },
+  });
+  // Same reasoning as recordSale: placements above the new count point at
+  // copies that no longer exist.
+  await tx.cardplacement.deleteMany({
+    where: { cardid: card.id, copyindex: { gt: remaining } },
+  });
+}

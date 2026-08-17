@@ -5,10 +5,11 @@ import { check, validationResult } from "express-validator";
 import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
-import recordSale from "../services/sales.js";
+import recordSale, { recordWithdrawal } from "../services/sales.js";
 import { matches as matchesWishlist } from "./wishlist.js";
 import {
   releaseExpiredOrders,
+  reservedByCard,
   nowSeconds,
   expiryFromNow,
 } from "../services/orders.js";
@@ -264,6 +265,7 @@ function describeOrder(order) {
       cardid: line.cardid,
       quantity: line.quantity,
       price: line.price,
+      kind: line.kind,
       name: line.card?.cardgeneral?.name ?? null,
       cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
       image: line.card?.cardgeneral?.image ?? null,
@@ -271,7 +273,10 @@ function describeOrder(order) {
       condition: line.card?.cardcondition?.name ?? null,
       language: line.card?.cardlanguage?.name ?? null,
     })),
+    // Withdrawals are the customer's own cards going home, so they add nothing
+    // to what is owed.
     total: order.orderline
+      .filter((line) => line.kind !== "withdrawal")
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
   };
@@ -358,12 +363,22 @@ router.post(
     const today = nowSeconds();
     await prisma.$transaction(async (tx) => {
       for (const line of order.orderline) {
-        await recordSale(tx, {
-          card: line.card,
-          quantity: line.quantity,
-          price: Number(line.price),
-          date: today,
-        });
+        if (line.kind === "withdrawal") {
+          // The customer's own consigned card going home. No sale row, because
+          // there is no buyer and nobody to pay out — writing one would credit
+          // the owner for buying their own card.
+          await recordWithdrawal(tx, {
+            card: line.card,
+            quantity: line.quantity,
+          });
+        } else {
+          await recordSale(tx, {
+            card: line.card,
+            quantity: line.quantity,
+            price: Number(line.price),
+            date: today,
+          });
+        }
       }
       await tx.order.update({
         where: { id },
@@ -371,7 +386,16 @@ router.post(
       });
     });
 
-    return res.status(200).json({ message: messages.ORDER_COMPLETED });
+    // Nothing was charged if the whole bag was the customer's own cards going
+    // home, so do not claim it was.
+    const chargedForAnything = order.orderline.some(
+      (line) => line.kind !== "withdrawal"
+    );
+    return res.status(200).json({
+      message: chargedForAnything
+        ? messages.ORDER_COMPLETED
+        : messages.ORDER_HANDED_OVER,
+    });
   })
 );
 
@@ -509,6 +533,188 @@ router.get(
     );
 
     return res.status(200).json(rows);
+  })
+);
+
+// --------------------------------------------------------------------------
+// Wishlist matches and pick-up bags
+// --------------------------------------------------------------------------
+
+// Cards in stock that satisfy somebody's wishlist, grouped by customer — the
+// shop's to-do list of bags to fill. Written by scripts/matchWishlists.mjs.
+router.get(
+  "/match",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+
+    const found = await prisma.wishlistmatch.findMany({
+      where: { resolved: null },
+      include: {
+        wishlist: {
+          include: { player: { select: { id: true, name: true } } },
+        },
+        card: {
+          include: {
+            cardgeneral: true,
+            cardcondition: { select: { name: true } },
+            cardlanguage: { select: { name: true } },
+            collection: { select: { id: true, playerid: true } },
+          },
+        },
+      },
+      orderBy: [{ playerid: "asc" }, { found: "asc" }],
+    });
+
+    // Group by customer: the unit of work is "fill this person's bag", not
+    // "act on this one card".
+    const byPlayer = new Map();
+    for (const match of found) {
+      const player = match.wishlist?.player;
+      if (!byPlayer.has(match.playerid)) {
+        byPlayer.set(match.playerid, {
+          playerid: match.playerid,
+          name: player?.name ?? null,
+          matches: [],
+        });
+      }
+      byPlayer.get(match.playerid).matches.push({
+        id: match.id,
+        kind: match.kind,
+        found: match.found,
+        wishlistid: match.wishlistid,
+        wanted: match.wishlist?.name ?? null,
+        cardid: match.cardid,
+        name: match.card?.cardgeneral?.name ?? null,
+        cardsetcode: match.card?.cardgeneral?.cardsetcode ?? null,
+        image: match.card?.cardgeneral?.image ?? null,
+        variant: match.card?.variant ?? null,
+        condition: match.card?.cardcondition?.name ?? null,
+        language: match.card?.cardlanguage?.name ?? null,
+        price: match.card?.price ?? null,
+        available: match.card?.quantity ?? 0,
+      });
+    }
+
+    return res.status(200).json([...byPlayer.values()]);
+  })
+);
+
+// Put a matched card in the customer's pick-up bag.
+//
+// The bag IS their open pending order: "awaiting pickup and payment" is
+// precisely what a pending order already means, so this appends to it rather
+// than inventing a parallel concept. Reserving is what takes the card out of
+// everyone else's availability; stock only drops when the order completes.
+//
+// The wishlist entry goes away, because it has been answered.
+router.post(
+  "/match/:matchId/setaside",
+  [check("matchId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.matchId, 10);
+
+    const match = await prisma.wishlistmatch.findUnique({
+      where: { id },
+      include: { card: true },
+    });
+    if (!match || match.resolved) {
+      return res.status(404).json({ message: messages.MATCH_NOT_FOUND });
+    }
+
+    await releaseExpiredOrders(prisma);
+
+    // Is the card still actually free to give away?
+    const reserved = await reservedByCard(prisma, [match.cardid]);
+    const available = Math.max(
+      0,
+      (match.card?.quantity ?? 0) - (reserved.get(match.cardid) ?? 0)
+    );
+    if (available < 1) {
+      return res.status(400).json({ message: messages.ORDER_NOT_ENOUGH_STOCK });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // One open bag per customer; anything already set aside joins it.
+      let bag = await tx.order.findFirst({
+        where: { playerid: match.playerid, status: "pending" },
+        orderBy: { created: "asc" },
+      });
+      if (!bag) {
+        bag = await tx.order.create({
+          data: {
+            playerid: match.playerid,
+            status: "pending",
+            created: nowSeconds(),
+            expires: expiryFromNow(),
+          },
+        });
+      }
+
+      // A withdrawal is the customer's own card, so it is priced at zero:
+      // nothing is owed for taking it home.
+      const price = match.kind === "withdrawal" ? 0 : match.card?.price ?? 0;
+
+      const line = await tx.orderline.findFirst({
+        where: { orderid: bag.id, cardid: match.cardid },
+      });
+      if (line) {
+        await tx.orderline.update({
+          where: { id: line.id },
+          data: { quantity: line.quantity + 1 },
+        });
+      } else {
+        await tx.orderline.create({
+          data: {
+            orderid: bag.id,
+            cardid: match.cardid,
+            quantity: 1,
+            price,
+            kind: match.kind,
+          },
+        });
+      }
+
+      // The card is physically moving into the bag, so it is no longer in
+      // whichever binder or box it was filed in.
+      await tx.cardplacement.deleteMany({ where: { cardid: match.cardid } });
+
+      // The wish has been answered.
+      await tx.wishlist.delete({ where: { id: match.wishlistid } });
+    });
+
+    return res.status(200).json({ message: messages.MATCH_SET_ASIDE });
+  })
+);
+
+// Not this one — leave the wishlist entry alone and stop offering this card.
+router.post(
+  "/match/:matchId/dismiss",
+  [check("matchId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.matchId, 10);
+
+    const match = await prisma.wishlistmatch.findUnique({ where: { id } });
+    if (!match || match.resolved) {
+      return res.status(404).json({ message: messages.MATCH_NOT_FOUND });
+    }
+
+    // Resolved rather than deleted, so the next matcher run does not simply
+    // re-raise it.
+    await prisma.wishlistmatch.update({
+      where: { id },
+      data: { resolved: nowSeconds(), resolution: "dismissed" },
+    });
+    return res.status(200).json({ message: messages.MATCH_DISMISSED });
   })
 );
 

@@ -8,7 +8,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start-dev": "nodemon -r dotenv/config",
     "start": "node app.js",
-    "sync:scryfall": "node -r dotenv/config scripts/syncScryfall.mjs"
+    "sync:scryfall": "node -r dotenv/config scripts/syncScryfall.mjs",
+    "match:wishlists": "node -r dotenv/config scripts/matchWishlists.mjs"
   },
   "repository": {
     "type": "git",

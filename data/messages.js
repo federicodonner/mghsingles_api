@@ -48,12 +48,16 @@ const messages = {
     "No hay stock suficiente de una de las cartas para reservarla.",
   ORDER_CANCELLED: "El pedido fue cancelado y las cartas quedaron disponibles.",
   ORDER_COMPLETED: "El pedido fue entregado y cobrado.",
+  ORDER_HANDED_OVER: "Las cartas fueron entregadas a su dueño.",
   CARD_NOT_AVAILABLE: "Esta carta no está a la venta.",
   WISHLIST_REPEAT: "Esa carta ya está en tu lista de deseados.",
   WISHLIST_NOT_FOUND: "Ese deseado no existe.",
   WISHLIST_REMOVED: "La carta fue quitada de tu lista de deseados.",
   FINISH_NOT_AVAILABLE:
     "Esta versión de la carta no existe en esa terminación.",
+  MATCH_NOT_FOUND: "Esa coincidencia ya no existe.",
+  MATCH_SET_ASIDE: "La carta fue apartada para el cliente.",
+  MATCH_DISMISSED: "La coincidencia fue descartada.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

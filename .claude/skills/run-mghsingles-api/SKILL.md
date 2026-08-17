@@ -144,6 +144,40 @@ psql -d mghsingles -c "SELECT started,bulkupdated,cards,skipped,ok,error FROM sy
 **On a fresh database, run it once before the app is useful** — `cardgeneral`
 is empty until it does, so nothing can be stocked, searched or wishlisted.
 
+## Wishlist matching
+
+Finds cards in stock that satisfy somebody's wishlist, so the shop can set them
+aside. Scheduled, not hooked to writes: matching is a wishlist-by-stock
+comparison, so running it on every add would run it constantly to find nothing,
+and would still miss matches created by a reservation lapsing or a customer
+editing their filters.
+
+```bash
+npm run match:wishlists
+```
+
+**Every 10 minutes** via Heroku Scheduler. It is a small query against the
+wishlist and the matching stock — not the 77MB Scryfall download — so a short
+interval is cheap, and the shop wants to hear about a match while the customer
+might still be standing there.
+
+Two kinds of match:
+- `purchase` — the card belongs to another consignor; completing writes a sale
+- `withdrawal` — the card is in the customer's **own** collection; completing
+  removes it from stock and writes **no sale**, because there is no buyer and
+  nobody to pay out
+
+Unresolved matches are recomputed each run, so one disappears by itself when the
+card sells, the entry is deleted, or the customer narrows their filters past it.
+Dismissed matches are marked resolved rather than deleted, so the next run does
+not simply re-raise them.
+
+Runs are recorded in `syncrun` alongside the Scryfall sync:
+
+```bash
+psql -d mghsingles -c "SELECT source,started,cards,sets,ok,error FROM syncrun ORDER BY id DESC LIMIT 10;"
+```
+
 ## Run (agent path)
 
 Launch, probe every route, shut down:
@@ -275,6 +309,20 @@ unset and every query fails at runtime. Don't use it.
 
 - **`card` tracks printing as a `variant` string, `sale` as a `foil` boolean.**
   `POST /admin/sale` maps `variant === "foil"` when it writes the sale row.
+
+- **The "pick-up bag" is just the customer's open pending order.** Setting a
+  matched card aside appends a line to it rather than inventing a parallel
+  concept — "awaiting pickup and payment" is exactly what a pending order
+  already means. Reserving is what removes the card from everyone else's
+  availability; stock only drops when the order completes. The card's
+  `cardplacement` rows are cleared at set-aside, because it has physically left
+  its binder or box for the bag.
+
+- **`orderline.kind` decides whether money moves.** A `withdrawal` line is a
+  customer collecting a card out of their own consigned collection: priced at
+  zero, contributes nothing to the order total, and completing it calls
+  `recordWithdrawal` rather than `recordSale`. Writing a sale there would credit
+  the owner for buying their own card.
 
 - **Reservations never decrement stock.** An `order` is a claim: availability
   is `card.quantity` minus open `orderline` quantities, computed on read by

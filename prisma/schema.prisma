@@ -28,6 +28,7 @@ model card {
   cardgeneral   cardgeneral?   @relation(fields: [scryfallid], references: [scryfallid], onDelete: NoAction, onUpdate: NoAction, map: "card_cardgeneral")
   cardplacement cardplacement[]
   orderline     orderline[]
+  wishlistmatch wishlistmatch[]
 }
 
 model cardcondition {
@@ -221,6 +222,10 @@ model orderline {
   cardid   Int
   quantity Int
   price    Decimal @db.Decimal(10, 2)
+  /// `purchase` is an ordinary sale. `withdrawal` is a customer collecting a
+  /// card out of their OWN consigned collection: it leaves stock, but no money
+  /// changes hands and no sale row is written, because there is nobody to pay.
+  kind     orderlinekind @default(purchase)
   order    order   @relation(fields: [orderid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "orderline_order")
   card     card    @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "orderline_card")
 
@@ -248,6 +253,8 @@ model wishlist {
   conditionids Int[]
   variants     String[]
   player   player @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "wishlist_player")
+
+  wishlistmatch wishlistmatch[]
 
   @@unique([playerid, name], map: "wishlist_player_name_unique")
 }
@@ -283,4 +290,41 @@ model syncrun {
   finished    Int?
 
   @@index([source, ok, started])
+}
+
+/// A card in stock that satisfies somebody's wishlist entry.
+///
+/// Written by a scheduled job rather than on every add: matching is a
+/// wishlist-by-stock comparison, and doing it on each write would run it
+/// constantly to discover nothing. Persisting the result is what makes "new
+/// since you last looked" possible — recomputing on page load could tell the
+/// shop a match exists, but not that it is new.
+model wishlistmatch {
+  id         Int       @id @default(autoincrement())
+  wishlistid Int
+  cardid     Int
+  /// Denormalised so the shop's queue can group by customer without joining
+  /// through the wishlist every time.
+  playerid   Int
+  kind       matchkind
+  found      Int
+  resolved   Int?
+  resolution String?
+  wishlist   wishlist  @relation(fields: [wishlistid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "wishlistmatch_wishlist")
+  card       card      @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "wishlistmatch_card")
+
+  @@unique([wishlistid, cardid], map: "wishlistmatch_unique")
+  @@index([playerid, resolved])
+}
+
+enum orderlinekind {
+  purchase
+  withdrawal
+}
+
+/// Mirrors orderlinekind: a match against a card in the customer's OWN
+/// collection is something they can simply take back, not buy.
+enum matchkind {
+  purchase
+  withdrawal
 }
