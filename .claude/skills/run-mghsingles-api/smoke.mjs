@@ -116,6 +116,7 @@ const PROBES = [
   ["/sale", true],
   ["/admin/me", true],
   ["/admin/pendingpayments", true],
+  ["/storage", true],
 ];
 
 let broken = 0;

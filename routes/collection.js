@@ -108,7 +108,10 @@ router.get(
         cardgeneral: true,
         cardcondition: { select: { name: true } },
         cardlanguage: { select: { name: true } },
-        cardposition: true,
+        cardplacement: {
+          include: { storage: { select: { id: true, name: true, type: true } } },
+          orderBy: { copyindex: "asc" },
+        },
       },
     });
 
@@ -120,12 +123,9 @@ router.get(
           cardgeneral,
           cardcondition,
           cardlanguage,
-          cardposition,
+          cardplacement,
           ...rest
         } = card;
-        // A card has at most one position row in practice; the schema allows
-        // many, so take the first deterministically.
-        const position = cardposition.sort((a, b) => a.id - b.id)[0] ?? null;
         return {
           id: rest.id,
           quantity: rest.quantity,
@@ -136,25 +136,20 @@ router.get(
           image: cardgeneral?.image ?? null,
           condition: cardcondition?.name ?? null,
           language: cardlanguage?.name ?? null,
-          positionid: position?.id ?? null,
-          copyindex: position?.copyindex ?? null,
-          depth: position?.depth ?? null,
-          page: position?.page ?? null,
-          position: position?.position ?? null,
+          // One entry per placed copy. Copies with no placement simply do not
+          // appear here, so `placements.length` can be < `quantity`.
+          placements: cardplacement.map((pl) => ({
+            id: pl.id,
+            copyindex: pl.copyindex,
+            storage: pl.storage,
+            page: pl.page,
+            pocket: pl.pocket,
+            depth: pl.depth,
+            sequence: pl.sequence,
+          })),
         };
       })
-      .sort(
-        (a, b) => (a.page ?? 0) - (b.page ?? 0) || (a.position ?? 0) - (b.position ?? 0)
-      );
-
-    // Determine the number of pages for the sorter
-    if (collectionToReturn.binder) {
-      const maxPage = await prisma.cardposition.aggregate({
-        where: { collectionid: collection.id },
-        _max: { page: true },
-      });
-      collectionToReturn.maxPage = maxPage._max.page;
-    }
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
 
     res.status(200).json(collectionToReturn);
   })

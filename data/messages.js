@@ -31,6 +31,16 @@ const messages = {
   NOT_FOUND: "El recurso solicitado no existe.",
   SERVER_ERROR:
     "Ocurrió un error inesperado, por favor inténtalo nuevamente más tarde.",
+  STORAGE_NOT_FOUND: "El contenedor especificado no existe.",
+  STORAGE_NOT_EMPTY:
+    "El contenedor todavía tiene cartas, vacíalo antes de eliminarlo.",
+  STORAGE_DELETED: "El contenedor fue eliminado.",
+  STORAGE_SHOP_OWNED:
+    "Este contenedor es de la tienda, no puede entregarse a un cliente.",
+  COPY_ALREADY_PLACED: "Esa copia ya está guardada en un contenedor.",
+  ALL_COPIES_PLACED: "Todas las copias de esta carta ya están guardadas.",
+  PLACEMENT_NOT_FOUND: "La ubicación especificada no existe.",
+  PLACEMENT_REMOVED: "La carta fue retirada del contenedor.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

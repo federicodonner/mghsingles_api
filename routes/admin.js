@@ -135,7 +135,7 @@ router.post(
 
         // Modify the stock of the card
         if (saleQuantity === cardInDb.quantity) {
-          await tx.cardposition.deleteMany({ where: { cardid: cardInDb.id } });
+          await tx.cardplacement.deleteMany({ where: { cardid: cardInDb.id } });
           await tx.card.delete({ where: { id: cardInDb.id } });
         } else {
           await tx.card.update({
@@ -193,7 +193,12 @@ router.get(
 
     const [sales, payments, collections] = await Promise.all([
       prisma.sale.findMany({
-        select: { collectionid: true, price: true, percent: true },
+        select: {
+          collectionid: true,
+          price: true,
+          percent: true,
+          quantity: true,
+        },
       }),
       prisma.payment.groupBy({
         by: ["collectionid"],
@@ -209,15 +214,16 @@ router.get(
     const { Decimal } = Prisma;
     const ZERO = new Decimal(0);
 
-    // NOTE: sales and commission deliberately sum `price` without multiplying
-    // by `quantity`, matching the behaviour of the SQL this replaced. If
-    // `price` is per-unit rather than a line total, this under-reports.
+    // `sale.price` is the price of ONE card, so every line is price * quantity.
+    // The SQL this replaced summed price alone and under-reported every
+    // multi-copy sale.
     const totals = new Map();
     for (const sale of sales) {
       const entry =
         totals.get(sale.collectionid) ?? { sales: ZERO, commission: ZERO };
-      entry.sales = entry.sales.add(sale.price);
-      entry.commission = entry.commission.add(sale.price.mul(sale.percent));
+      const lineTotal = sale.price.mul(sale.quantity);
+      entry.sales = entry.sales.add(lineTotal);
+      entry.commission = entry.commission.add(lineTotal.mul(sale.percent));
       totals.set(sale.collectionid, entry);
     }
 

@@ -23,7 +23,7 @@ model card {
   cardcondition cardcondition  @relation(fields: [conditionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_condition")
   cardlanguage  cardlanguage   @relation(fields: [languageid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_language")
   cardgeneral   cardgeneral?   @relation(fields: [scryfallid], references: [scryfallid], onDelete: NoAction, onUpdate: NoAction, map: "card_cardgeneral")
-  cardposition  cardposition[]
+  cardplacement cardplacement[]
 }
 
 model cardcondition {
@@ -61,18 +61,6 @@ model cardlanguage {
   sale sale[]
 }
 
-model cardposition {
-  id           Int        @id @default(autoincrement())
-  cardid       Int
-  collectionid Int
-  copyindex    Int
-  page         Int?
-  position     Int?
-  depth        Int?
-  card         card       @relation(fields: [cardid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "cardposition_card")
-  collection   collection @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "cardposition_collection")
-}
-
 model cardset {
   cardsetname String
   releasedate DateTime
@@ -86,10 +74,8 @@ model collection {
   playerid     Int
   active       Boolean        @default(true)
   percent      Float?
-  binder       Int?
   name         String?
   card         card[]
-  cardposition cardposition[]
   player       player         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "collection_player")
   payment      payment[]      @ignore
   sale         sale[]
@@ -119,6 +105,7 @@ model player {
   superuser    Boolean      @default(false)
   passwordhash String
   collection   collection[]
+  storage      storage[]
   login        login[]      @ignore
 }
 
@@ -137,4 +124,50 @@ model sale {
   cardcondition cardcondition @relation(fields: [conditionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sale_condition")
   cardlanguage  cardlanguage  @relation(fields: [languageid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sale_language")
   cardgeneral   cardgeneral   @relation(fields: [scryfallid], references: [scryfallid], onDelete: NoAction, onUpdate: NoAction, map: "sale_cardgeneral")
+}
+
+/// A physical container in the shop or in a customer's hands.
+///
+/// `playerid` null means the shop owns it. A customer-owned container can be
+/// left in the shop to sell from (`inshop` true) or taken home (`inshop`
+/// false), at which point its cards are out of the shop's sellable inventory.
+model storage {
+  id            Int             @id @default(autoincrement())
+  name          String
+  type          storagetype
+  playerid      Int?
+  inshop        Boolean         @default(true)
+  player        player?         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "storage_player")
+  cardplacement cardplacement[]
+
+  @@index([playerid])
+}
+
+/// Where one physical copy of a card row lives.
+///
+/// A `card` row carries a quantity, so `copyindex` (1-based) identifies which
+/// of those copies this is — the shop can split four Bolts across a binder and
+/// a box. Binder placements use page/pocket/depth; sorted boxes use sequence;
+/// unsorted boxes use none of them.
+model cardplacement {
+  id        Int     @id @default(autoincrement())
+  cardid    Int
+  copyindex Int
+  storageid Int
+  page      Int?
+  pocket    Int?
+  depth     Int?
+  sequence  Int?
+  card      card    @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cardplacement_card")
+  storage   storage @relation(fields: [storageid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cardplacement_storage")
+
+  @@unique([cardid, copyindex], map: "cardplacement_copy_unique")
+  @@index([storageid, page, pocket, depth])
+  @@index([storageid, sequence])
+}
+
+enum storagetype {
+  binder
+  sorted_box
+  unsorted_box
 }

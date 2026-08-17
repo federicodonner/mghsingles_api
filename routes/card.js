@@ -313,7 +313,7 @@ router.delete("/:cardId", [authentication, check("cardId").isNumeric()], asyncHa
   // If there are cards that match, delete them. Positions reference the card,
   // so they have to go first.
   await prisma.$transaction([
-    prisma.cardposition.deleteMany({ where: { cardid: cardId } }),
+    prisma.cardplacement.deleteMany({ where: { cardid: cardId } }),
     prisma.card.delete({ where: { id: cardId } }),
   ]);
 

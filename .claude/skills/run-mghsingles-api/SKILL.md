@@ -40,6 +40,11 @@ devDependency, so a bare `npx prisma` fetches v7, which rejects this schema:
 npx prisma@6.14.0 db push
 ```
 
+`db push` is a dev shortcut — it diffs the schema straight onto the database
+and will happily drop a column. There are no migration files in this project,
+so anything heading for the Heroku database needs a real migration written by
+hand.
+
 Seed lookup tables, card sets and card definitions:
 
 ```bash
@@ -204,6 +209,24 @@ unset and every query fails at runtime. Don't use it.
 
 - **`card` tracks printing as a `variant` string, `sale` as a `foil` boolean.**
   `POST /admin/sale` maps `variant === "foil"` when it writes the sale row.
+
+- **Storage lives in `storage` + `cardplacement`, not on `collection`.** A
+  `storage` row is a binder, sorted box or unsorted box; `playerid` null means
+  the shop owns it, and a customer's container can be taken home with
+  `inshop: false`. `cardplacement` pins one *copy* of a card row to a spot —
+  `copyindex` is 1-based and a row with `quantity: 8` has copies 1..8, which
+  can sit in different containers. Binders use page/pocket/depth, sorted boxes
+  use sequence, unsorted boxes use none of them. The old `cardposition` table
+  and `collection.binder` column are gone.
+
+- **Binder spreads put page 1 alone.** Spread 0 is `[null, 1]`, spread 1 is
+  `[2, 3]`, spread 2 is `[4, 5]` — page 1 has nothing facing it, like opening a
+  real binder. `spreadForPage()` and `pagesInSpread()` in `routes/storage.js`
+  are the only place that arithmetic lives; import them rather than repeating it.
+
+- **`sale.price` is per unit.** Line totals are `price * quantity`. The SQL
+  that `/admin/pendingpayments` replaced summed `price` alone and under-reported
+  every multi-copy sale.
 
 - **Scryfall blocks requests without a `User-Agent`.** `fetch` with no headers
   gets an empty body and no error — fields silently come back `undefined`. Send

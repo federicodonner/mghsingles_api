@@ -43,6 +43,8 @@ app.put("/player/password", authentication);
 
 // Middleware for superuser authentication
 app.use("/admin", [authentication, superuser]);
+app.use("/storage", [authentication, superuser]);
+app.use("/find", [authentication, superuser]);
 
 // Routes for oauth
 import oauthRoute from "./routes/oauth.js";
@@ -75,6 +77,14 @@ app.use("/store", storeRoute);
 // Routes for admin operations
 import adminRoute from "./routes/admin.js";
 app.use("/admin", adminRoute);
+
+// Routes for physical storage (binders and boxes)
+import storageRoute from "./routes/storage.js";
+app.use("/storage", storageRoute);
+
+// Routes for locating a card in the shop
+import findRoute from "./routes/find.js";
+app.use("/find", findRoute);
 
 // 404 for anything no route matched, so the client gets JSON rather than
 // Express's HTML error page.
