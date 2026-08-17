@@ -49,6 +49,10 @@ model cardgeneral {
   color           String?
   rarity          String?
   collectornumber String?
+  priceusd        Decimal? @db.Decimal(10, 2)
+  priceusdfoil    Decimal? @db.Decimal(10, 2)
+  priceeur        Decimal? @db.Decimal(10, 2)
+  pricesupdated   Int?
   cardset         cardset @relation(fields: [cardsetcode], references: [cardset])
   card            card[]
   sale            sale[]
@@ -73,7 +77,7 @@ model collection {
   id           Int            @id @default(autoincrement())
   playerid     Int
   active       Boolean        @default(true)
-  percent      Float?
+  percent      Decimal?       @db.Decimal(5, 4)
   name         String?
   card         card[]
   player       player         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "collection_player")
@@ -114,7 +118,7 @@ model sale {
   collectionid  Int
   scryfallid    String
   price         Decimal       @db.Decimal(10, 2)
-  percent       Decimal       @db.Decimal(10, 2)
+  percent       Decimal       @db.Decimal(5, 4)
   quantity      Int
   date          Int
   conditionid   Int

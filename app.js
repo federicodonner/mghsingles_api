@@ -50,10 +50,6 @@ app.use("/find", [authentication, superuser]);
 import oauthRoute from "./routes/oauth.js";
 app.use("/oauth", oauthRoute);
 
-// Routes for getting bulk cards
-import bulkRoute from "./routes/processBulk.js";
-app.use("/bulk", bulkRoute);
-
 // Routes for user operations
 import playerRoute from "./routes/player.js";
 app.use("/player", playerRoute);

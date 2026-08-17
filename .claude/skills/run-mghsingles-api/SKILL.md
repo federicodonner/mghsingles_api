@@ -86,6 +86,33 @@ CROSS JOIN (SELECT id FROM collection
 Those are real Scryfall ids seeded by `seed.sql`, so the store renders actual
 card images.
 
+## Scryfall sync
+
+Pulls every printing into `cardset` + `cardgeneral` so the apps never call
+Scryfall on a page load. Verified: **116,712 cards and 1,047 sets in ~8s.**
+
+```bash
+npm run sync:scryfall
+```
+
+Quick check without the full download:
+
+```bash
+node -r dotenv/config scripts/syncScryfall.mjs --limit 3000
+```
+
+```bash
+node -r dotenv/config scripts/syncScryfall.mjs --dry-run
+```
+
+Idempotent — it upserts on `scryfallid` and never deletes, because `card` and
+`sale` both reference `cardgeneral` and a printing withdrawn upstream would
+otherwise break a sale record.
+
+**Nightly:** this is a plain script with no scheduler inside it, so run it from
+cron or Heroku Scheduler (`npm run sync:scryfall`). Do not add an in-process
+timer — it would fire once per dyno.
+
 ## Run (agent path)
 
 Launch, probe every route, shut down:
@@ -227,6 +254,21 @@ unset and every query fails at runtime. Don't use it.
 - **`sale.price` is per unit.** Line totals are `price * quantity`. The SQL
   that `/admin/pendingpayments` replaced summed `price` alone and under-reported
   every multi-copy sale.
+
+- **Use the JSONL bulk file, not the JSON one.** `jsonl_download_uri` is
+  gzipped one-object-per-line (~77MB), so `scripts/syncScryfall.mjs` streams it
+  through `zlib` + `readline` with no parser dependency and no memory growth.
+  The plain-JSON variant is a single ~500MB document and needs the whole thing
+  resident to parse.
+
+- **Scryfall sends prices as strings** (`"0.35"`). They are cast in SQL
+  (`$n::numeric`) rather than converted through a JS number, so Postgres parses
+  the decimal exactly.
+
+- **Card search needs the trigram index.** A substring match on `name` across
+  ~117k rows is a sequential scan (~56ms and growing); with the GIN trigram
+  index it is ~0.7ms. Prisma cannot express that index and there are no
+  migration files, so `syncScryfall.mjs` creates it idempotently on every run.
 
 - **Scryfall blocks requests without a `User-Agent`.** `fetch` with no headers
   gets an empty body and no error — fields silently come back `undefined`. Send
