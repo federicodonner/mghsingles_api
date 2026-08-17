@@ -27,8 +27,9 @@ router.post("/", asyncHandler(async (req, res) => {
     return res.status(404).json({ message: messages.USER_NOT_FOUND });
   }
 
-  // Stores the superuser status of the user for the UI
-  let superuser = player.superuser;
+  // The UI needs to know what this account may do, so it can send a customer
+  // to the store and a shop hand to the back office.
+  let role = player.role;
 
   // Verifies that the password is correct
   const passwordResult = await compare(password, player.passwordhash);
@@ -41,7 +42,7 @@ router.post("/", asyncHandler(async (req, res) => {
   const newToken = await prisma.login.create({
     data: { date: new Date(), playerid: player.id, token },
   });
-  return res.status(200).json({ token: newToken.token, superuser });
+  return res.status(200).json({ token: newToken.token, role });
 }));
 
 export default router;

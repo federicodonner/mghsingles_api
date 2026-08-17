@@ -10,7 +10,7 @@ Express 4 + Prisma 6 + PostgreSQL. Single entrypoint `app.js`, listens on
 
 The agent path is `.claude/skills/run-mghsingles-api/smoke.mjs`: it launches
 the server, logs in, probes every route and prints which ones answer, then
-adds and deletes a card so the write paths are exercised too. All 17 currently
+adds and deletes a card so the write paths are exercised too. All 21 currently
 return 200.
 
 All paths below are relative to `mghsingles_api/`.
@@ -56,15 +56,15 @@ Do **not** load `mghsingles.psql`. It predates the current `schema.prisma`
 (it has `card.foil` and lacks `card.variant`/`price`/`ckuri`), and every table
 in it is empty except the two lookup tables that `seed.sql` reproduces.
 
-Create the dev user (`devuser` / `devpass123`) and promote it to superuser —
-`/admin/*` returns 403 without this:
+Create the dev user (`devuser` / `devpass123`) and make it the owner —
+`/admin/*` returns 403 for a customer account:
 
 ```bash
 node .claude/skills/run-mghsingles-api/smoke.mjs --seed-user
 ```
 
 ```bash
-psql -d mghsingles -c "UPDATE player SET superuser=true WHERE username='devuser';"
+psql -d mghsingles -c "UPDATE player SET role='owner' WHERE username='devuser';"
 ```
 
 Give that user a stocked collection so `/store` is non-empty:
@@ -415,6 +415,25 @@ unset and every query fails at runtime. Don't use it.
   zero, contributes nothing to the order total, and completing it calls
   `recordWithdrawal` rather than `recordSale`. Writing a sale there would credit
   the owner for buying their own card.
+
+- **Three roles, not a boolean.** `player.role` is `customer` / `staff` /
+  `owner`, replacing `superuser`. `/admin`, `/storage` and `/find` are gated on
+  **staff** in `app.js`; the routes a shop hand should not have — payouts
+  (`/admin/payment`, `/admin/pendingpayments`), pricing (`/admin/condition`,
+  `/admin/card/:id/price`) and roles (`/admin/player*`) — carry **owner**
+  individually, next to the thing they protect. Both gates return the same 403
+  and message, so probing tells you nothing.
+
+- **The role check is server-side; the menu is only a courtesy.** The admin app
+  caches the role in localStorage to decide what to draw. Editing it buys a menu
+  item that returns 403.
+
+- **An owner cannot change their own role,** and the last owner cannot be
+  demoted — either would lock the door from the inside with no way back.
+
+- **There is no "create staff account".** People register themselves as
+  customers from the store and an owner promotes them, so nobody sets a password
+  on somebody else's behalf.
 
 - **Reservations never decrement stock.** An `order` is a claim: availability
   is `card.quantity` minus open `orderline` quantities, computed on read by

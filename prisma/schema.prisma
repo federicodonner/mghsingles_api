@@ -146,7 +146,14 @@ model player {
   username     String
   name         String
   email        String
-  superuser    Boolean      @default(false)
+  /// What this account may do. Replaces the old `superuser` boolean, which
+  /// could not express the difference between someone who works the counter
+  /// and someone who signs the payouts.
+  ///
+  /// customer — buys, consigns, wishlists. No access to the admin app.
+  /// staff    — everything a shop hand needs: sell, stock, storage, orders.
+  /// owner    — staff, plus money (payouts), pricing policy and user roles.
+  role         playerrole   @default(customer)
   passwordhash String
   collection   collection[]
   storage      storage[]
@@ -422,4 +429,10 @@ model cardprice {
 
   @@unique([scryfallid, source, finish], map: "cardprice_unique")
   @@index([source, finish])
+}
+
+enum playerrole {
+  customer
+  staff
+  owner
 }

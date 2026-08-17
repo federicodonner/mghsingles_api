@@ -62,24 +62,34 @@ export async function authentication(req, res, next) {
   next();
 }
 
-// Authentication for admin endpoints
-// Verifies that the player is superuser
-export async function superuser(req, res, next) {
-  // Get the player id from the authentication middleware
-  var playerId = req.playerId;
+// Role gates for the shop side.
+//
+// `staff` covers everything a shop hand does: selling, stock, storage, orders.
+// `owner` is staff plus the things that should not be delegated casually —
+// payouts, pricing policy and who gets which role.
+//
+// Both run AFTER `authentication`, which is what sets req.playerId.
+function requireRole(allowed) {
+  return async function (req, res, next) {
+    const playerId = req.playerId;
+    const prisma = req.prisma;
 
-  // Gets prisma from middleware
-  const prisma = req.prisma;
+    const player = await prisma.player.findUnique({
+      where: { id: playerId },
+      select: { role: true },
+    });
 
-  // Check if the user is a superuser
-  const player = await prisma.player.findUnique({
-    where: { id: playerId, superuser: true },
-  });
+    // Same 403 and message whichever gate refused, so a staff member probing an
+    // owner route learns nothing about what exists.
+    if (!player || !allowed.includes(player.role)) {
+      return res.status(403).json({ message: messages.UNAUTHORIZED });
+    }
 
-  // If the results is empty, it means that the user is not a superuser
-  if (!player) {
-    return res.status(403).json({ message: messages.UNAUTHORIZED });
-  }
-  // If the user exists and is a superuser, advance
-  next();
+    // Downstream handlers frequently need the role; save them a lookup.
+    req.playerRole = player.role;
+    next();
+  };
 }
+
+export const staff = requireRole(["staff", "owner"]);
+export const owner = requireRole(["owner"]);

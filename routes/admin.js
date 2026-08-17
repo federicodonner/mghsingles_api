@@ -1,10 +1,15 @@
-// Route file for store-side (superuser) operations
+// Route file for store-side operations.
+//
+// Mounted behind `authentication` + `staff` (see app.js). Routes that should
+// not be delegated to a shop hand carry `owner` individually: payouts, pricing
+// policy and user roles.
 import { Router } from "express";
 var router = Router();
 import { check, validationResult } from "express-validator";
 import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
+import { owner } from "../middleware/authentication.js";
 import recordSale, { recordWithdrawal } from "../services/sales.js";
 import { applyReferencePrices } from "../services/pricing.js";
 import {
@@ -25,7 +30,7 @@ import {
 // Creates a payment
 router.post(
   "/payment",
-  [check("collectionId").isNumeric(), check("ammount").isFloat({ gt: 0 })],
+  [owner, check("collectionId").isNumeric(), check("ammount").isFloat({ gt: 0 })],
   asyncHandler(async (req, res) => {
     // Validates that the parameters are correct
     const errors = validationResult(req);
@@ -163,7 +168,7 @@ router.get(
         username: true,
         name: true,
         email: true,
-        superuser: true,
+        role: true,
       },
     });
 
@@ -180,6 +185,7 @@ router.get(
 // Return payments and sales from collections
 router.get(
   "/pendingpayments",
+  owner,
   asyncHandler(async (req, res) => {
     // Gets prisma from middleware
     const prisma = req.prisma;
@@ -863,6 +869,7 @@ router.get(
 // turn it into a price for every other grade.
 router.get(
   "/condition",
+  owner,
   asyncHandler(async (req, res) => {
     const conditions = await req.prisma.cardcondition.findMany({
       orderBy: { id: "asc" },
@@ -876,6 +883,7 @@ router.get(
 // Body: { conditions: [{ id, sellmultiplier, buymultiplier }] }
 router.put(
   "/condition",
+  owner,
   asyncHandler(async (req, res) => {
     const rows = req.body.conditions;
     if (!Array.isArray(rows) || !rows.length) {
@@ -922,7 +930,7 @@ router.put(
 // Each field is optional; omitting one leaves it untouched.
 router.put(
   "/card/:cardId/price",
-  [check("cardId").isNumeric()],
+  [owner, check("cardId").isNumeric()],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -989,6 +997,70 @@ router.put(
     });
     void updated;
     return res.status(200).json(fresh);
+  })
+);
+
+// --------------------------------------------------------------------------
+// User roles
+// --------------------------------------------------------------------------
+
+const ROLES = ["customer", "staff", "owner"];
+
+// Everyone with an account, so the owner can see who has which role.
+router.get(
+  "/player",
+  owner,
+  asyncHandler(async (req, res) => {
+    const players = await req.prisma.player.findMany({
+      select: { id: true, username: true, name: true, email: true, role: true },
+      orderBy: [{ role: "asc" }, { name: "asc" }],
+    });
+    return res.status(200).json(players);
+  })
+);
+
+// Change someone's role.
+//
+// There is no "create staff account" here on purpose: people register
+// themselves as customers and the owner promotes them, so there is never a
+// password set by one person on behalf of another.
+router.put(
+  "/player/:playerId/role",
+  [owner, check("playerId").isNumeric(), check("role").isIn(ROLES)],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.playerId, 10);
+    const role = req.body.role;
+
+    // An owner demoting themselves would lock the door from the inside, and
+    // it is never what was meant.
+    if (id === req.playerId) {
+      return res.status(400).json({ message: messages.ROLE_SELF });
+    }
+
+    const target = await prisma.player.findUnique({ where: { id } });
+    if (!target) {
+      return res.status(404).json({ message: messages.USER_NOT_FOUND });
+    }
+
+    // The shop must keep at least one owner, or nobody can grant the role back.
+    if (target.role === "owner" && role !== "owner") {
+      const owners = await prisma.player.count({ where: { role: "owner" } });
+      if (owners <= 1) {
+        return res.status(400).json({ message: messages.ROLE_LAST_OWNER });
+      }
+    }
+
+    const updated = await prisma.player.update({
+      where: { id },
+      data: { role },
+      select: { id: true, username: true, name: true, role: true },
+    });
+    return res.status(200).json(updated);
   })
 );
 

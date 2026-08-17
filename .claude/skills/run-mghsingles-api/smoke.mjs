@@ -95,7 +95,7 @@ let token = null;
   token = body.token || null;
   console.log(
     `login: POST /oauth -> ${r.status}` +
-      (token ? ` token=${token} superuser=${body.superuser}` : ` ${JSON.stringify(body)}`)
+      (token ? ` token=${token} role=${body.role}` : ` ${JSON.stringify(body)}`)
   );
   if (!token) console.log(`  (re-run with --seed-user to create ${USER})`);
 }
@@ -120,6 +120,8 @@ const PROBES = [
   ["/wishlist", true],
   ["/admin/order", true],
   ["/admin/wishlist", true],
+  ["/admin/condition", true],
+  ["/admin/player", true],
   ["/admin/match", true],
   ["/notification", true],
 ];

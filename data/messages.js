@@ -64,6 +64,10 @@ const messages = {
   MULTIPLIER_RANGE:
     "Los multiplicadores deben estar entre 0 y 1 — un valor mayor pondría una carta jugada por encima de una NM.",
   PRICE_SAVED: "El precio fue guardado.",
+  ROLE_SELF: "No puedes cambiar tu propio rol.",
+  ROLE_LAST_OWNER:
+    "Debe quedar al menos un dueño; asigna el rol a otra persona primero.",
+  ROLE_SAVED: "El rol fue actualizado.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 
