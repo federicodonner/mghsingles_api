@@ -2,13 +2,14 @@
 //
 // Mounted at /wishlist behind `authentication` (see app.js).
 //
-// An entry is a card NAME plus three independent constraints — version
-// (printing), language and grade (condition). Each constraint is a LIST, and an
-// empty list means "any", so all of these are expressible:
+// An entry is a card NAME plus four independent constraints — version
+// (printing), language, grade (condition) and finish (variant). Each constraint
+// is a LIST, and an empty list means "any", so all of these are expressible:
 //
 //   any version, English only          -> versions [], languageids [1]
 //   these three printings, any language-> versions [a,b,c], languageids []
 //   any version, NM or EX, ES or EN    -> conditionids [1,2], languageids [1,2]
+//   any version, foil only             -> variants ["foil"]
 //
 // Entries never expire.
 import { Router } from "express";
@@ -34,6 +35,9 @@ function readList(value, cast) {
 const readIds = (v) => readList(v, (x) => parseInt(x, 10));
 const readStrings = (v) => readList(v, (x) => String(x).trim());
 
+// card.variant is a free-form nullable string; null means an ordinary card.
+const DEFAULT_VARIANT = "normal";
+
 // Does this card satisfy the entry? Each category is checked independently and
 // an empty list is a wildcard.
 function matches(entry, card) {
@@ -46,6 +50,14 @@ function matches(entry, card) {
   if (
     entry.conditionids.length &&
     !entry.conditionids.includes(card.conditionid)
+  ) {
+    return false;
+  }
+  // A card row with no finish recorded is a plain, non-foil card, so it should
+  // satisfy a "normal" filter rather than nothing at all.
+  if (
+    entry.variants.length &&
+    !entry.variants.includes(card.variant || DEFAULT_VARIANT)
   ) {
     return false;
   }
@@ -120,6 +132,7 @@ async function attachAvailability(prisma, entries) {
       versions: entry.versions,
       languageids: entry.languageids,
       conditionids: entry.conditionids,
+      variants: entry.variants,
       inStock,
       excluded,
     };
@@ -227,6 +240,7 @@ router.post(
         versions: readStrings(req.body.versions),
         languageids: readIds(req.body.languageids),
         conditionids: readIds(req.body.conditionids),
+        variants: readStrings(req.body.variants),
       },
     });
 
@@ -267,6 +281,9 @@ router.put(
     }
     if (req.body.conditionids !== undefined) {
       data.conditionids = readIds(req.body.conditionids);
+    }
+    if (req.body.variants !== undefined) {
+      data.variants = readStrings(req.body.variants);
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });

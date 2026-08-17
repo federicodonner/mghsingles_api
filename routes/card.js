@@ -275,7 +275,25 @@ router.get("/modifiers", asyncHandler(async (req, res) => {
 
   const conditions = await prisma.cardcondition.findMany();
   const languages = await prisma.cardlanguage.findMany();
-  return res.status(200).json({ conditions, languages });
+
+  // Finishes have no lookup table — card.variant is a free-form nullable
+  // string. Offer the canonical set plus anything the shop has actually used,
+  // so a finish that only exists in stock still appears, and the common ones
+  // appear even when nothing is stocked.
+  const used = await prisma.card.findMany({
+    distinct: ["variant"],
+    select: { variant: true },
+  });
+  const variants = [
+    ...new Set([
+      "normal",
+      "foil",
+      "foil-etched",
+      ...used.map((row) => row.variant).filter(Boolean),
+    ]),
+  ];
+
+  return res.status(200).json({ conditions, languages, variants });
 }));
 
 // Returns the sets

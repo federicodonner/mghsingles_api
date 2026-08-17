@@ -228,14 +228,15 @@ model wishlist {
   created  Int
   /// Constraints, each independent of the others. An EMPTY list means "any" —
   /// so a customer can pin the printing while accepting any language, or accept
-  /// any printing in only English or Spanish. Several values in one list are
-  /// alternatives: "either of these three versions".
+  /// any printing in only English or Spanish, foil only. Several values in one
+  /// list are alternatives: "either of these three versions".
   ///
   /// Held as arrays rather than join tables because they are small, bounded,
   /// owned entirely by this row and never queried on their own.
   versions     String[]
   languageids  Int[]
   conditionids Int[]
+  variants     String[]
   player   player @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "wishlist_player")
 
   @@unique([playerid, name], map: "wishlist_player_name_unique")
