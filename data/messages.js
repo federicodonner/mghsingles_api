@@ -58,6 +58,8 @@ const messages = {
   MATCH_NOT_FOUND: "Esa coincidencia ya no existe.",
   MATCH_SET_ASIDE: "La carta fue apartada para el cliente.",
   MATCH_DISMISSED: "La coincidencia fue descartada.",
+  NOTIFICATION_NOT_FOUND: "Ese aviso no existe.",
+  NOTIFICATION_REMOVED: "El aviso fue eliminado.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

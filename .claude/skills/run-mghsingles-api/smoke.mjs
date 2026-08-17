@@ -120,6 +120,8 @@ const PROBES = [
   ["/wishlist", true],
   ["/admin/order", true],
   ["/admin/wishlist", true],
+  ["/admin/match", true],
+  ["/notification", true],
 ];
 
 let broken = 0;

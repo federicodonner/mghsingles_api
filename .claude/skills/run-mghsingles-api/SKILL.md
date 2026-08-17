@@ -172,6 +172,18 @@ card sells, the entry is deleted, or the customer narrows their filters past it.
 Dismissed matches are marked resolved rather than deleted, so the next run does
 not simply re-raise them.
 
+Setting a match aside notifies the customer. That happens at **set-aside**, not
+when the match is found: until the shop has physically pulled the card it could
+still be sold at the counter, and promising it earlier would be wrong some of
+the time.
+
+Notifications are **in-app only** — there is no mail or push infrastructure in
+this project. A `notification` row is exactly what a mailer would read, so
+adding email later is a job over that table rather than a rewrite. `cardname` is
+snapshotted rather than joined, because the card row is deleted once the order
+completes and the notice would otherwise blank out just as the customer
+collected the thing it was about.
+
 Runs are recorded in `syncrun` alongside the Scryfall sync:
 
 ```bash

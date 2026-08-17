@@ -42,6 +42,7 @@ function describeOrder(order) {
       cardid: line.cardid,
       quantity: line.quantity,
       price: line.price,
+      kind: line.kind,
       name: line.card?.cardgeneral?.name ?? null,
       cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
       cardsetname: line.card?.cardgeneral?.cardsetname ?? null,
@@ -50,8 +51,10 @@ function describeOrder(order) {
       condition: line.card?.cardcondition?.name ?? null,
       language: line.card?.cardlanguage?.name ?? null,
     })),
-    // Per-unit prices, so the line total is price * quantity.
+    // Per-unit prices, so the line total is price * quantity. Withdrawals are
+    // the customer's own cards going home and are never charged for.
     total: order.orderline
+      .filter((line) => line.kind !== "withdrawal")
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
   };

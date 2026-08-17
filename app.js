@@ -35,6 +35,7 @@ app.use("/sale", authentication);
 app.use("/player/me", authentication);
 app.use("/order", authentication);
 app.use("/wishlist", authentication);
+app.use("/notification", authentication);
 app.put("/player", authentication);
 app.put("/player/password", authentication);
 // NOTE: /card is deliberately NOT listed here. Registering auth by path from
@@ -82,6 +83,9 @@ app.use("/order", orderRoute);
 
 import wishlistRoute from "./routes/wishlist.js";
 app.use("/wishlist", wishlistRoute);
+
+import notificationRoute from "./routes/notification.js";
+app.use("/notification", notificationRoute);
 
 // Routes for physical storage (binders and boxes)
 import storageRoute from "./routes/storage.js";

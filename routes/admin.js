@@ -620,7 +620,9 @@ router.post(
 
     const match = await prisma.wishlistmatch.findUnique({
       where: { id },
-      include: { card: true },
+      include: {
+        card: { include: { cardgeneral: { select: { name: true, cardsetcode: true } } } },
+      },
     });
     if (!match || match.resolved) {
       return res.status(404).json({ message: messages.MATCH_NOT_FOUND });
@@ -685,6 +687,25 @@ router.post(
 
       // The wish has been answered.
       await tx.wishlist.delete({ where: { id: match.wishlistid } });
+
+      // Tell the customer. Fired here rather than when the match was found:
+      // until the card is actually pulled it could still be sold at the
+      // counter, and promising it first would be a lie some of the time.
+      await tx.notification.create({
+        data: {
+          playerid: match.playerid,
+          kind:
+            match.kind === "withdrawal"
+              ? "wishlist_withdrawal_ready"
+              : "wishlist_purchase_ready",
+          // Snapshotted: the card row disappears once the order completes.
+          cardname: match.card?.cardgeneral?.name ?? null,
+          cardsetcode: match.card?.cardgeneral?.cardsetcode ?? null,
+          variant: match.card?.variant ?? null,
+          orderid: bag.id,
+          created: nowSeconds(),
+        },
+      });
     });
 
     return res.status(200).json({ message: messages.MATCH_SET_ASIDE });

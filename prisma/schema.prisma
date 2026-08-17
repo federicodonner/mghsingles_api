@@ -124,6 +124,7 @@ model player {
   storage      storage[]
   order        order[]
   wishlist     wishlist[]
+  notification notification[]
   login        login[]      @ignore
 }
 
@@ -327,4 +328,29 @@ enum orderlinekind {
 enum matchkind {
   purchase
   withdrawal
+}
+
+/// Something the shop wants a customer to know.
+///
+/// In-app only: there is no mail or push infrastructure in this project, and
+/// inventing one here would mean credentials and a provider that do not exist.
+/// A row here is exactly what a future mailer would read, so adding email later
+/// is a job over this table rather than a rewrite.
+///
+/// `cardname` is a SNAPSHOT, not a join. The card row is deleted when the order
+/// completes, so a notification that only referenced it by id would turn blank
+/// precisely once the customer had collected the thing it was about.
+model notification {
+  id          Int     @id @default(autoincrement())
+  playerid    Int
+  kind        String
+  cardname    String?
+  cardsetcode String?
+  variant     String?
+  orderid     Int?
+  created     Int
+  readat      Int?
+  player      player  @relation(fields: [playerid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "notification_player")
+
+  @@index([playerid, readat])
 }
