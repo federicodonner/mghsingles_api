@@ -28,6 +28,10 @@ const messages = {
     "La solicitud falló por demora. Intenta nuevamente más tarde.",
   UPDATE_FINISHED_1: "Actualización terminada, ",
   UPDATE_FINISHED_2: " cartas añadidas a la base de datos.",
+  NOT_FOUND: "El recurso solicitado no existe.",
+  SERVER_ERROR:
+    "Ocurrió un error inesperado, por favor inténtalo nuevamente más tarde.",
+  PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 
-module.exports = messages;
+export default messages;

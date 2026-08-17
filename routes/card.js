@@ -1,15 +1,12 @@
 // Route file for card operations
-var express = require("express");
-var https = require("https");
-var router = express.Router();
-var client = require("../config/db");
-const {
-  check,
-  escape,
-  validationResult,
-  isNumeric,
-} = require("express-validator");
-var messages = require("../data/messages");
+import { Router } from "express";
+import { request } from "https";
+var router = Router();
+import client from "../config/db.js";
+import { check, validationResult } from "express-validator";
+import messages from "../data/messages.js";
+import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
+import { authentication } from "../middleware/authentication.js";
 
 async function getExternalUrl(path) {
   const options = {
@@ -20,7 +17,7 @@ async function getExternalUrl(path) {
   let content = "";
 
   return new Promise(function (resolve, reject) {
-    var req = https.request(options, function (res) {
+    var req = request(options, function (res) {
       // reject on bad status
       if (res.statusCode < 200 || res.statusCode >= 300) {
         return reject(new Error("statusCode=" + res.statusCode));
@@ -195,7 +192,7 @@ async function getSingleCardPrice(card) {
 router.get(
   "/versions/:cardName",
   [check("cardName").escape()],
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     // Loads the data into a variable
     let cardName = req.params.cardName;
 
@@ -204,29 +201,31 @@ router.get(
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
+    // Gets prisma from middleware
+    const prisma = req.prisma;
+
     // Finds the card in the database
-    let sql =
-      "SELECT * FROM cardgeneral WHERE LOWER(name) like LOWER('%" +
-      cardName +
-      "%') ORDER BY name, cardset";
-    let cards = await client.query(sql);
-    if (cards.err) {
-      throw cards.err;
-    }
-    if (!cards.rows.length) {
+    const cards = await prisma.cardgeneral.findMany({
+      where: { name: { contains: cardName, mode: "insensitive" } },
+      orderBy: [{ name: "asc" }, { cardsetcode: "asc" }],
+    });
+
+    console.log(cards);
+
+    if (!cards) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
-    if (cards.rows.length >= 800) {
+    if (cards.length >= 800) {
       return res.status(400).json({ message: messages.TOO_MANY_CARDS });
     }
 
-    return res.status(200).json({ cards: cards.rows });
-  }
+    return res.status(200).json({ cards });
+  })
 );
 
 // Returns all the cards in a specific set
-router.get("/set/:setId", [check("setId").escape()], async (req, res) => {
+router.get("/set/:setId", [check("setId").escape()], asyncHandler(async (req, res) => {
   // Loads the data into a variable
   let setId = req.params.setId;
 
@@ -235,99 +234,107 @@ router.get("/set/:setId", [check("setId").escape()], async (req, res) => {
     return res.status(404).json({ message: messages.SET_NOT_FOUND });
   }
 
-  // ESTOY ACÁ
+  // Gets prisma from middleware
+  const prisma = req.prisma;
 
-  // Finds the card in the database
-  let sql = "SELECT * FROM";
-  "SELECT * FROM cardset WHERE id = " + setId + ";";
-  let sets = await client.query(sql);
-  if (cards.err) {
-    throw cards.err;
-  }
-  if (!cards.rows.length) {
+  const cards = await prisma.cardgeneral.findMany({
+    where: { cardsetcode: setId },
+  });
+
+  if (!cards) {
     return res.status(404).json({ message: messages.CARD_NOT_FOUND });
   }
 
-  if (cards.rows.length >= 800) {
+  if (cards.length >= 800) {
     return res.status(400).json({ message: messages.TOO_MANY_CARDS });
   }
 
-  return res.status(200).json(cards.rows);
-});
+  // Sort cards by number
+  // Have to do it outside the prisma query because the number is a string
+  cards.sort((a, b) => {
+    try {
+      if (parseInt(a.collectornumber) > parseInt(b.collectornumber)) {
+        return 1;
+      } else {
+        return -1;
+      }
+    } catch {
+      return 1;
+    }
+  });
+
+  return res.status(200).json({ cards });
+}));
 
 // --------------------------------
 // --------------------------------
 // Returns the possible conditions and languages
-router.get("/modifiers", async (req, res) => {
-  let sql = "SELECT * FROM cardcondition";
-  let conditions = await client.query(sql);
-  if (conditions.err) {
-    throw conditions.err;
-  }
-  sql = "SELECT * FROM cardlanguage";
-  let languages = await client.query(sql);
-  if (languages.err) {
-    throw languages.err;
-  }
-  res
-    .status(200)
-    .json({ conditions: conditions.rows, languages: languages.rows });
-});
+router.get("/modifiers", asyncHandler(async (req, res) => {
+  // Gets prisma from middleware
+  const prisma = req.prisma;
+
+  const conditions = await prisma.cardcondition.findMany();
+  const languages = await prisma.cardlanguage.findMany();
+  return res.status(200).json({ conditions, languages });
+}));
 
 // Returns the sets
-router.get("/sets", async (req, res) => {
-  let sql = "SELECT * FROM cardSet ORDER BY releasedate DESC";
-  let sets = await client.query(sql);
-  if (sets.err) {
-    throw sets.err;
-  }
-  res.status(200).json({ sets: sets.rows });
-});
+router.get("/sets", asyncHandler(async (req, res) => {
+  // Gets prisma from middleware
+  const prisma = req.prisma;
+
+  const sets = await prisma.cardset.findMany({
+    orderBy: [{ releasedate: "desc" }, { cardsetname: "asc" }],
+  });
+
+  return res.status(200).json(sets);
+}));
 
 // Deletes a card with a certain ID
-router.delete("/:cardId", [check("cardId").isNumeric()], async (req, res) => {
+router.delete("/:cardId", [authentication, check("cardId").isNumeric()], asyncHandler(async (req, res) => {
   // Gets the playerId from the authentication middleware
-  var playerId = req.playerId;
+  const playerId = requirePlayerId(req);
 
-  var cardId = req.params.cardId;
+  const cardId = parseInt(req.params.cardId, 10);
 
-  // Verifies that the card exists and that it's in the user's collection
-  let sql =
-    "SELECT c.scryfallid FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN player p ON o.playerid = p.id WHERE c.id = " +
-    cardId +
-    " AND p.id = " +
-    playerId;
-  let cards = await client.query(sql);
-  if (cards.err) {
-    throw cards.err;
-  }
-  if (!cards.rows.length) {
+  // Gets prisma from middleware
+  const prisma = req.prisma;
+
+  // Verifies that the card exists and that it's in the user's collection.
+  // Scoping on playerid here is what stops one player deleting another's card.
+  const card = await prisma.card.findFirst({
+    where: { id: cardId, collection: { playerid: playerId } },
+    select: { scryfallid: true },
+  });
+  if (!card) {
     return res.status(404).json({ message: messages.CARD_NOT_FOUND });
   }
 
-  // If there are cards that match, delete them
-  sql = "DELETE FROM card WHERE id = " + cardId;
-  let deletes = await client.query(sql);
-  if (deletes.err) {
-    throw deletes.err;
-  }
+  // If there are cards that match, delete them. Positions reference the card,
+  // so they have to go first.
+  await prisma.$transaction([
+    prisma.cardposition.deleteMany({ where: { cardid: cardId } }),
+    prisma.card.delete({ where: { id: cardId } }),
+  ]);
 
-  return res.status(200).json(cards.rows[0]);
-});
+  return res.status(200).json(card);
+}));
 
 // --------------------------------
 // --------------------------------
 // Add card
 router.post(
-  "/",
+  "/:collectionId",
   [
+    authentication,
     check("scryfallId").escape().exists(),
     check("quantity").isNumeric().isFloat({ min: 1 }),
     check("condition").isNumeric().exists(),
     check("language").isNumeric().exists(),
     check("variant").optional().escape(),
+    check("collectionId").isNumeric(),
   ],
-  async (req, res) => {
+  asyncHandler(async (req, res) => {
     // Validates that the parameters are correct
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -335,112 +342,83 @@ router.post(
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
     // Gets the playerId from the authentication middleware
-    var playerId = req.playerId;
-    // Gets the card collection
-    let sql = `SELECT * FROM collection WHERE playerid = ${playerId}`;
-    let collections = await client.query(sql);
-    if (collections.err) {
-      throw collections.err;
-    }
-    // If there are no results, return error
-    if (!collections.rows.length) {
-      return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
-    }
+    const playerId = requirePlayerId(req);
+    // Gets the card collection from the request
+    const collectionid = parseInt(req.params.collectionId);
+
     // Loads the data into variables to use
-    var scryfallId = req.body.scryfallId;
+    const scryfallid = req.body.scryfallId;
     // Round the quantity in case the use sends a fraction
-    var quantity = Math.floor(req.body.quantity);
-    var condition = req.body.condition;
-    var language = req.body.language;
-    var variant = req.body.variant;
+    const quantity = Math.floor(req.body.quantity);
+    const conditionid = parseInt(req.body.condition);
+    const languageid = parseInt(req.body.language);
+    // `variant` is a string ("normal" / "foil"), not a number — parseInt on it
+    // yielded NaN and Prisma rejected the write.
+    const variant = req.body.variant ? String(req.body.variant) : "normal";
 
-    // Verifies that the selected condition exists
-    sql = `SELECT * FROM cardcondition WHERE id = ${condition}`;
-    let conditions = await client.query(sql);
-    if (conditions.err) {
-      throw conditions.err;
-    }
-    // If there are no results, return error
-    if (!conditions.rows.length) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
-    // Verifies that the selected language exists
-    sql = `SELECT * FROM cardlanguage WHERE id = ${language}`;
-    let languages = await client.query(sql);
-    if (languages.err) {
-      throw languages.err;
-    }
-    // If there are no results, return error
-    if (!languages.rows.length) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-
-    // Tries to find the card in the database
-    sql = `SELECT * FROM cardgeneral WHERE scryfallid = '${scryfallId}'`;
-    let cards = await client.query(sql);
-    if (cards.err) {
-      throw cards.err;
-    }
-    // If there are no results, return error
-    if (!cards.rows.length) {
-      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
-    }
-
-    // let card = cards.rows[0];
-    // card.conditionid = condition;
-    // card.variant = variant;
-    // // The card exists, so it tries to find the price
-
-    // const singlePriceResponse = await getSingleCardPrice(cards.rows[0]);
-
-    // Tries to find the card in the collection, if it's there
-    // add the quantity to the existing card
-    let collectionId = collections.rows[0].id;
-    sql = `SELECT id, quantity FROM card WHERE scryfallid = '${scryfallId}' AND conditionid = ${condition} AND languageid = ${language} AND variant = '${variant}'`;
-    let existingCards = await client.query(sql);
-    if (existingCards.err) {
-      throw existingCards.err;
-    }
-    // If there are results, get the cardId
-    if (existingCards.rows.length) {
-      sql = `UPDATE card SET quantity = ${
-        parseInt(existingCards.rows[0].quantity) + quantity
-      } WHERE id = ${existingCards.rows[0].id}`;
-
-      let addCards = await client.query(sql);
-      if (addCards.err) {
-        throw addCards.err;
-      }
-      return res.status(200).json({ message: messages.COLLECTION_UPDATED });
-    } else {
-      // Adds the card to the database
-      sql = `INSERT INTO card (scryfallid, conditionid, languageid, quantity, collectionid, variant) VALUES ('${scryfallId}',${condition},${language},${quantity},${collectionId},'${variant}') RETURNING id, conditionid, variant`;
-      let addCards = await client.query(sql);
-      if (addCards.err) {
-        throw addCards.err;
+    try {
+      // The collection must belong to the requesting player. Without this any
+      // authenticated user could add cards to anyone else's collection.
+      const collection = await prisma.collection.findFirst({
+        where: { id: collectionid, playerid: playerId },
+        select: { id: true },
+      });
+      if (!collection) {
+        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
       }
 
-      // After the card is inserted, find the price and update the database
+      const cardsInCardsGeneral = await prisma.cardgeneral.findUnique({
+        where: { scryfallid },
+      });
 
-      sql = `SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid WHERE c.id = '${addCards.rows[0].id}'`;
-      const cards = await client.query(sql);
-      if (cards.err) {
-        throw cards.err;
+      // If there are no results, return error
+      if (!cardsInCardsGeneral) {
+        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
       }
 
-      const singlePriceResponse = await getSingleCardPrice(cards.rows[0]);
+      // Tries to find the card in the collection, if it's there
+      // add the quantity to the existing card
+      const existingCard = await prisma.card.findFirst({
+        where: { scryfallid, conditionid, languageid, variant, collectionid },
+      });
 
-      // After the card is inserted, get the price and update it
-      return res.status(201).json({ message: messages.COLLECTION_UPDATED });
+      // If there are results, get the cardId
+      if (existingCard) {
+        await prisma.card.update({
+          where: { id: existingCard.id },
+          data: { quantity: existingCard.quantity + quantity },
+        });
+
+        return res.status(200).json({ message: messages.COLLECTION_UPDATED });
+      } else {
+        // Adds the card to the database
+        const newCard = await prisma.card.create({
+          data: {
+            scryfallid,
+            conditionid,
+            languageid,
+            quantity,
+            collectionid,
+            variant,
+          },
+        });
+
+        return res.status(201).json({ message: messages.COLLECTION_UPDATED });
+      }
+    } catch (e) {
+      console.log(e);
+      return res.status(400).json({ error: e });
     }
-  }
+  })
 );
 
 // --------------------------------
 // --------------------------------
 // Returns the price of a single card scrapped from CK
-router.post("/price/:cardid", async (req, res) => {
+router.post("/price/:cardid", authentication, asyncHandler(async (req, res) => {
   const cardid = req.params.cardid;
   let sql = `SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid WHERE c.id = '${cardid}'`;
   const cards = await client.query(sql);
@@ -468,13 +446,13 @@ router.post("/price/:cardid", async (req, res) => {
     });
   }
   return res.status(200).json(singlePriceResponse);
-});
+}));
 
 // --------------------------------
 // --------------------------------
 // Returns the price of a group of cards scrapped from CK
 // Keep 2 seconds in between to avoid 429
-router.post("/multipleprice", async (req, res) => {
+router.post("/multipleprice", authentication, asyncHandler(async (req, res) => {
   const cards = req.body.cards;
   let prices = [];
   let scrappedCards = 0;
@@ -515,5 +493,5 @@ router.post("/multipleprice", async (req, res) => {
   }).then(() => {
     return res.status(200).json({ cards });
   });
-});
-module.exports = router;
+}));
+export default router;

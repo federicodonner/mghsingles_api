@@ -1,7 +1,7 @@
-var fetch = require("cross-fetch");
+import fetch from "cross-fetch";
 
 // Returns a random string of the specified length
-function generateToken(
+export function generateToken(
   length,
   universe = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 ) {
@@ -13,9 +13,7 @@ function generateToken(
 }
 
 // Access external URL
-async function accessURL(url) {
+export async function accessURL(url) {
   var fetchPromise = await fetch(url, { method: "GET", timeout: 30000 });
   return fetchPromise;
 }
-
-module.exports = { generateToken, accessURL};

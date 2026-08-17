@@ -1,39 +1,60 @@
 // Route file for sales operations
-var express = require("express");
-var router = express.Router();
-var client = require("../config/db");
-const { check, validationResult } = require("express-validator");
-var messages = require("../data/messages");
+import { Router } from "express";
+var router = Router();
+import messages from "../data/messages.js";
+import asyncHandler from "../middleware/asyncHandler.js";
 
 // Get the user's sales
-router.get("/", async (req, res) => {
-  // Gets the playerId from the authentication middleware
-  var playerId = req.playerId;
-  // Gets the card collection
-  let sql = "SELECT * FROM collection WHERE playerid = " + playerId;
-  let collections = await client.query(sql);
-  if (collections.err) {
-    throw collections.err;
-  }
-  // If there are no results, return error
-  if (!collections.rows.length) {
-    return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
-  }
+router.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    // Gets the playerId from the authentication middleware
+    const playerId = req.playerId;
 
-  // If there is a collection, retrieve the cards.
-  var collectionId = collections.rows[0].id;
-  sql =
-    "SELECT s.price, s.percent, s.quantity, s.date, s.conditionid, s.languageid, s.foil, cg.*, o.name AS condition, l.name AS language FROM sale s LEFT JOIN cardgeneral cg ON s.scryfallid = cg.scryfallid LEFT JOIN cardcondition o ON s.conditionid = o.id LEFT JOIN cardlanguage l ON s.languageid = l.id WHERE collectionid = " +
-    collectionId +
-    " ORDER BY s.date DESC, cg.name";
-  let sales = await client.query(sql);
-  if (sales.err) {
-    throw sales.err;
-  }
-  collections.rows[0].sales = sales.rows;
-  delete collections.rows[0].id;
-  delete collections.rows[0].playerId;
-  res.status(200).json(collections.rows[0]);
-});
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
-module.exports = router;
+    const collection = await prisma.collection.findFirst({
+      where: { playerid: playerId },
+      orderBy: { id: "asc" },
+    });
+
+    // If there are no results, return error
+    if (!collection) {
+      return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+    }
+
+    const sales = await prisma.sale.findMany({
+      where: { collectionid: collection.id },
+      include: {
+        cardgeneral: true,
+        cardcondition: { select: { name: true } },
+        cardlanguage: { select: { name: true } },
+      },
+      orderBy: [{ date: "desc" }],
+    });
+
+    const { id, playerid, ...collectionToReturn } = collection;
+
+    // Flatten the joined lookups into the shape the UI reads.
+    collectionToReturn.sales = sales
+      .map((sale) => {
+        const { cardgeneral, cardcondition, cardlanguage, ...rest } = sale;
+        return {
+          ...rest,
+          ...cardgeneral,
+          condition: cardcondition?.name ?? null,
+          language: cardlanguage?.name ?? null,
+        };
+      })
+      // Prisma cannot order by a joined column, so the secondary sort by card
+      // name happens here. Sales are already newest-first from the database.
+      .sort(
+        (a, b) => b.date - a.date || (a.name ?? "").localeCompare(b.name ?? "")
+      );
+
+    res.status(200).json(collectionToReturn);
+  })
+);
+
+export default router;

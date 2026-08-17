@@ -1,4 +1,5 @@
-const { Client } = require("pg");
+import pkg from "pg";
+const { Client } = pkg;
 
 function connectDatabase() {
   var client;
@@ -25,4 +26,4 @@ function connectDatabase() {
 
   return client;
 }
-module.exports = connectDatabase();
+export default connectDatabase;

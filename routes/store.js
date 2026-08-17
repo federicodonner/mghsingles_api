@@ -1,102 +1,117 @@
 // Route file for store
-var express = require("express");
-var router = express.Router();
-var client = require("../config/db");
-const { check, validationResult, escape } = require("express-validator");
-var messages = require("../data/messages");
+import { Router } from "express";
+var router = Router();
+import { check, validationResult } from "express-validator";
+import messages from "../data/messages.js";
+import asyncHandler from "../middleware/asyncHandler.js";
+
+const PAGE_SIZE = 50;
+const SEARCH_PAGE_SIZE = 200;
+
+// Shape a card row the way both UIs read it: card fields at the top level,
+// with the cardgeneral join (name, image, set) flattened in alongside the
+// condition and language names.
+function flattenCard(card) {
+  const { cardgeneral, cardcondition, cardlanguage, collection, ...rest } = card;
+  return {
+    ...rest,
+    ...cardgeneral,
+    cardname: cardgeneral?.name ?? null,
+    condition: cardcondition?.name ?? null,
+    language: cardlanguage?.name ?? null,
+    collection: collection?.id ?? null,
+    player: collection?.player?.name ?? null,
+    percent: collection?.percent ?? null,
+  };
+}
+
+const CARD_INCLUDE = {
+  cardgeneral: true,
+  cardcondition: { select: { name: true } },
+  cardlanguage: { select: { name: true } },
+  collection: { select: { id: true, percent: true, player: { select: { name: true } } } },
+};
 
 // Return all available cards in the store paginated
-router.get("/:page", [check("page").isNumeric()], async (req, res) => {
-  // Validates that the parameters are correct
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    // If one of them isn't, returns an error
-    return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-  }
-  var page = req.params.page;
-  let pageSize = 50;
-
-  // Return how many cards there are for the UI to show
-  let sql =
-    "SELECT count(*) FROM card c LEFT JOIN collection o ON c.collectionid = o.id WHERE o.active = 1";
-  let quantity = await client.query(sql);
-  if (quantity.err) {
-    throw quantity.err;
-  }
-  let objectToReturn = {
-    numberOfCards: quantity.rows[0]["count"],
-    numberOfPages: Math.ceil(quantity.rows[0]["count"] / pageSize),
-  };
-
-  // Get the cards from active collections
-  const hola = "hola";
-  sql = `SELECT c.id, c.scryfallid, c.quantity, c.variant, c.price, CONCAT('https://','${process.env.CARDKINGDOM_URL}', c.ckuri) AS ckurl, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.image FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid WHERE o.active = 1 ORDER BY g.name`;
-  let cards = await client.query(sql);
-  if (cards.err) {
-    throw cards.err;
-  }
-  // Paginate the results
-  // If the total number of cards is less than one page, return them
-  if (cards.rows.length < pageSize) {
-    objectToReturn.cards = cards.rows;
-  } else {
-    // If there are more cards than one page, move the corresponding page to an arry to return
-    let cardsToReturn = [];
-    for (
-      var i = (page - 1) * pageSize;
-      i < Math.min(page * pageSize, cards.rows.length);
-      i++
-    ) {
-      cardsToReturn.push(cards.rows[i]);
-    }
-    // return res.status(200).json(cardsToReturn);
-    objectToReturn.cards = cardsToReturn;
-  }
-  return res.status(200).json(objectToReturn);
-});
-
-// Returns a specific card from the store
 router.get(
-  "/search/:cardName",
-  [check("cardName").escape()],
-  async (req, res) => {
+  "/:page",
+  [check("page").isNumeric()],
+  asyncHandler(async (req, res) => {
     // Validates that the parameters are correct
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       // If one of them isn't, returns an error
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
-    var cardName = req.params.cardName;
+    const page = Math.max(1, parseInt(req.params.page, 10) || 1);
 
-    let pageSize = 200;
-    // Return how many cards there are for the UI to show
-    let sql =
-      "SELECT count(*) FROM card c LEFT JOIN collection o ON c.collectionid = o.id WHERE o.active = 1";
-    let quantity = await client.query(sql);
-    if (quantity.err) {
-      throw quantity.err;
-    }
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
-    // Get the cards from active collections
-    sql = `SELECT c.id, c.scryfallid, c.quantity, c.variant, n.name AS condition, l.name AS language, g.name AS cardname, g.cardsetname, g.cardSet, g.image, o.id AS collection, p.name AS player, o.percent FROM card c LEFT JOIN collection o ON c.collectionid = o.id LEFT JOIN cardlanguage l ON c.languageid = l.id LEFT JOIN cardcondition n ON c.conditionid = n.id LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid LEFT JOIN player p ON o.playerid = p.id WHERE o.active = 1 AND LOWER(g.name) like LOWER('%${cardName}%') ORDER BY g.name`;
-    let cards = await client.query(sql);
-    if (cards.err) {
-      throw cards.err;
+    const where = { collection: { active: true } };
+
+    // Count and page in the database rather than loading every card and
+    // slicing in JS, which is what this route used to do.
+    const [numberOfCards, cards] = await Promise.all([
+      prisma.card.count({ where }),
+      prisma.card.findMany({
+        where,
+        include: CARD_INCLUDE,
+        orderBy: { id: "asc" },
+        skip: (page - 1) * PAGE_SIZE,
+        take: PAGE_SIZE,
+      }),
+    ]);
+
+    return res.status(200).json({
+      numberOfCards,
+      numberOfPages: Math.ceil(numberOfCards / PAGE_SIZE),
+      cards: cards.map(flattenCard),
+    });
+  })
+);
+
+// Returns a specific card from the store
+router.get(
+  "/search/:cardName",
+  [check("cardName").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    // Validates that the parameters are correct
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // If one of them isn't, returns an error
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
+    const cardName = req.params.cardName;
+
+    // Parameterised by Prisma — this used to interpolate cardName straight
+    // into a LIKE clause.
+    const where = {
+      collection: { active: true },
+      cardgeneral: { name: { contains: cardName, mode: "insensitive" } },
+    };
+
+    const cards = await req.prisma.card.findMany({
+      where,
+      include: CARD_INCLUDE,
+      take: SEARCH_PAGE_SIZE,
+    });
+
     // If no cards match the search, return not found
-    if (!cards.rows.length) {
+    if (!cards.length) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
-    let objectToReturn = {
-      numberOfCards: cards.rows.length,
-      numberOfPages: Math.ceil(cards.rows.length / pageSize),
-    };
+    const flattened = cards
+      .map(flattenCard)
+      .sort((a, b) => (a.cardname ?? "").localeCompare(b.cardname ?? ""));
 
-    // Return the results
-    objectToReturn.cards = cards.rows;
-    return res.status(200).json(objectToReturn);
-  }
+    return res.status(200).json({
+      numberOfCards: flattened.length,
+      numberOfPages: Math.ceil(flattened.length / SEARCH_PAGE_SIZE),
+      cards: flattened,
+    });
+  })
 );
 
-module.exports = router;
+export default router;

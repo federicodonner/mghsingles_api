@@ -1,0 +1,140 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model card {
+  id            Int            @id @default(autoincrement())
+  scryfallid    String?
+  conditionid   Int
+  languageid    Int
+  quantity      Int
+  collectionid  Int            @default(autoincrement())
+  variant       String?
+  approved      Boolean        @default(true)
+  price         Float?
+  priceupdate   Int?
+  ckuri         String?
+  collection    collection     @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_collection")
+  cardcondition cardcondition  @relation(fields: [conditionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_condition")
+  cardlanguage  cardlanguage   @relation(fields: [languageid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_language")
+  cardgeneral   cardgeneral?   @relation(fields: [scryfallid], references: [scryfallid], onDelete: NoAction, onUpdate: NoAction, map: "card_cardgeneral")
+  cardposition  cardposition[]
+}
+
+model cardcondition {
+  id   Int    @id @default(autoincrement())
+  name String
+  card card[]
+  sale sale[]
+}
+
+model cardgeneral {
+  scryfallid      String  @id
+  name            String
+  cardsetcode     String
+  cardsetname     String
+  image           String?
+  borderless      Boolean @default(false)
+  showcase        Boolean @default(false)
+  phyrexian       Boolean @default(false)
+  extendedart     Boolean @default(false)
+  retroframe      Boolean @default(false)
+  releasedatyear  Int?
+  boxtopper       Boolean @default(false)
+  color           String?
+  rarity          String?
+  collectornumber String?
+  cardset         cardset @relation(fields: [cardsetcode], references: [cardset])
+  card            card[]
+  sale            sale[]
+}
+
+model cardlanguage {
+  id   Int    @id @default(autoincrement())
+  name String
+  card card[]
+  sale sale[]
+}
+
+model cardposition {
+  id           Int        @id @default(autoincrement())
+  cardid       Int
+  collectionid Int
+  copyindex    Int
+  page         Int?
+  position     Int?
+  depth        Int?
+  card         card       @relation(fields: [cardid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "cardposition_card")
+  collection   collection @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "cardposition_collection")
+}
+
+model cardset {
+  cardsetname String
+  releasedate DateTime
+  iconsvguri  String?
+  cardset     String        @id
+  cardgeneral cardgeneral[]
+}
+
+model collection {
+  id           Int            @id @default(autoincrement())
+  playerid     Int
+  active       Boolean        @default(true)
+  percent      Float?
+  binder       Int?
+  name         String?
+  card         card[]
+  cardposition cardposition[]
+  player       player         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "collection_player")
+  payment      payment[]      @ignore
+  sale         sale[]
+}
+
+model login {
+  id       Int      @id @default(autoincrement())
+  playerid Int
+  token    String
+  date     DateTime
+  player   player   @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "login_player")
+}
+
+model payment {
+  id           Int        @id @default(autoincrement())
+  date         Int
+  ammount      Decimal    @db.Decimal(10, 2)
+  collectionid Int
+  collection   collection @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "payment_collection")
+}
+
+model player {
+  id           Int          @id @default(autoincrement())
+  username     String
+  name         String
+  email        String
+  superuser    Boolean      @default(false)
+  passwordhash String
+  collection   collection[]
+  login        login[]      @ignore
+}
+
+model sale {
+  id            Int           @id @default(autoincrement())
+  collectionid  Int
+  scryfallid    String
+  price         Decimal       @db.Decimal(10, 2)
+  percent       Decimal       @db.Decimal(10, 2)
+  quantity      Int
+  date          Int
+  conditionid   Int
+  languageid    Int
+  foil          Boolean       @default(false)
+  collection    collection    @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sale_collection")
+  cardcondition cardcondition @relation(fields: [conditionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sale_condition")
+  cardlanguage  cardlanguage  @relation(fields: [languageid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "sale_language")
+  cardgeneral   cardgeneral   @relation(fields: [scryfallid], references: [scryfallid], onDelete: NoAction, onUpdate: NoAction, map: "sale_cardgeneral")
+}

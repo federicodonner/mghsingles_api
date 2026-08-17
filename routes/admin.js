@@ -1,14 +1,16 @@
-// Route file for operations to the user's collection
-var express = require("express");
-var router = express.Router();
-var client = require("../config/db");
-const { check, validationResult, isNumeric } = require("express-validator");
-var messages = require("../data/messages");
+// Route file for store-side (superuser) operations
+import { Router } from "express";
+var router = Router();
+import { check, validationResult } from "express-validator";
+import { Prisma } from "@prisma/client";
+import messages from "../data/messages.js";
+import asyncHandler from "../middleware/asyncHandler.js";
 
+// Creates a payment
 router.post(
   "/payment",
-  [check("collectionId").isNumeric(), check("ammount").isNumeric().isFloat()],
-  async (req, res) => {
+  [check("collectionId").isNumeric(), check("ammount").isFloat({ gt: 0 })],
+  asyncHandler(async (req, res) => {
     // Validates that the parameters are correct
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -16,218 +18,230 @@ router.post(
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
     // Get the body content
-    var collectionId = req.body.collectionId;
-    var ammount = req.body.ammount;
+    const collectionId = parseInt(req.body.collectionId, 10);
+    const ammount = Number(req.body.ammount);
+
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
     // Verifies that the collection exists
-    let sql = "SELECT * FROM collection WHERE id = " + collectionId;
-    let collections = await client.query(sql);
-    if (collections.err) {
-      throw collections.err;
-    }
+    const collection = await prisma.collection.findUnique({
+      where: { id: collectionId },
+    });
     // If there are no results, return error
-    if (!collections.rows.length) {
+    if (!collection) {
       return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
     }
 
     // Store the payment in the database
-    var today = new Date();
-    today = Math.round(today / 1000);
-    sql =
-      "INSERT INTO payment (date, ammount, collectionid) VALUES (" +
-      today +
-      "," +
-      ammount +
-      "," +
-      collectionId +
-      ") RETURNING date, ammount";
-    let paymentInsert = await client.query(sql);
-    if (paymentInsert.err) {
-      throw paymentInsert.err;
-    }
+    const payment = await prisma.payment.create({
+      data: {
+        date: Math.round(Date.now() / 1000),
+        ammount,
+        collectionid: collectionId,
+      },
+      select: { date: true, ammount: true },
+    });
 
-    res.status(201).json(paymentInsert.rows[0]);
-  }
+    res.status(201).json(payment);
+  })
 );
 
 // Post a sale
-router.post("/sale", async (req, res) => {
-  // Sold card ids for getting them from database
-  var soldCardIds = "(";
+router.post(
+  "/sale",
+  asyncHandler(async (req, res) => {
+    // Gets cardId, price, quantity
+    const soldCards = req.body.soldCards;
 
-  // Gets cardId, price, quantity
-  var soldCards = req.body.soldCards;
+    if (!Array.isArray(soldCards) || !soldCards.length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
 
-  var allDataCorrect = true;
-  soldCards.forEach((card, index) => {
     // Verify that the data is correct
-    if (isNaN(card.id) || isNaN(card.saleQuantity) || isNaN(card.price)) {
-      allDataCorrect = false;
+    const allDataCorrect = soldCards.every(
+      (card) =>
+        Number.isInteger(Number(card.id)) &&
+        Number(card.saleQuantity) > 0 &&
+        Number(card.price) >= 0
+    );
+    if (!allDataCorrect) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
-    // Store the id for the query
-    if (index != soldCards.length - 1) {
-      soldCardIds = soldCardIds + card.id + ",";
-    } else {
-      soldCardIds = soldCardIds + card.id + ")";
+    // Verifies that there are no repeat ids in the array
+    const ids = soldCards.map((c) => Number(c.id));
+    if (new Set(ids).size !== ids.length) {
+      return res.status(400).json({ message: messages.SALE_REPEAT_CARDS });
     }
-  });
 
-  if (!allDataCorrect) {
-    return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-  }
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
-  sql =
-    "SELECT c.id, c.quantity, c.conditionid, c.languageid, c.foil, c.collectionid, c.scryfallid, g.name AS cardname, o.percent FROM card c LEFT JOIN cardgeneral g ON c.scryfallid = g.scryfallid LEFT JOIN collection o ON c.collectionid = o.id WHERE c.id in " +
-    soldCardIds;
-
-  let cardsInDb = await client.query(sql);
-  if (cardsInDb.err) {
-    throw cardsInDb.err;
-  }
-
-  // At this point:
-  // - user is superuser (because of admin middleware)
-  // - soldCards has JSONs of the sold cards
-  // - cardsInDb has those same cards from the db
-
-  // Verifies that there are no repeat ids in the array
-  var repeatCards = false;
-  soldCards.forEach((cardCompared, indexCompared) => {
-    soldCards.forEach((cardToCompare, indexToCompare) => {
-      if (
-        cardCompared.id == cardToCompare.id &&
-        indexCompared != indexToCompare
-      ) {
-        repeatCards = true;
-      }
+    const cardsInDb = await prisma.card.findMany({
+      where: { id: { in: ids } },
+      include: {
+        cardgeneral: { select: { name: true } },
+        collection: { select: { percent: true } },
+      },
     });
-  });
+    const byId = new Map(cardsInDb.map((c) => [c.id, c]));
 
-  if (repeatCards) {
-    return res.status(400).json({ message: messages.SALE_REPEAT_CARDS });
-  }
-
-  // Verifies that the cards exist
-  var cardNotFound = null;
-  soldCards.forEach((soldCard) => {
-    var idFound = false;
-    cardsInDb.rows.forEach((cardInDb) => {
-      if (soldCard.id == cardInDb.id) {
-        idFound = true;
-      }
-    });
-    if (!idFound) {
-      cardNotFound = soldCard;
+    // Verifies that the cards exist
+    const cardNotFound = soldCards.find((c) => !byId.has(Number(c.id)));
+    if (cardNotFound) {
+      return res
+        .status(400)
+        .json({ message: messages.SEARCH_NOT_FOUND, card: cardNotFound });
     }
-  });
-  if (cardNotFound) {
-    return res
-      .status(400)
-      .json({ message: messages.SEARCH_NOT_FOUND, card: cardNotFound });
-  }
 
-  // Verifies that there is enough quantity of each card in the collectino
-  var cardWithoutEnoughStock = null;
-  soldCards.forEach((soldCard) => {
-    cardsInDb.rows.forEach((cardInDb) => {
-      // If it already found one, stop verifying
-      if (!cardWithoutEnoughStock) {
-        if (
-          soldCard.id == cardInDb.id &&
-          soldCard.saleQuantity > cardInDb.quantity
-        ) {
-          cardWithoutEnoughStock = cardInDb;
-        }
-      }
-    });
-  });
-  if (cardWithoutEnoughStock) {
-    return res.status(400).json({
-      message: messages.SALE_NOT_ENOUGH_STOCK,
-      card: cardWithoutEnoughStock,
-    });
-  }
+    // Verifies that there is enough quantity of each card in the collection
+    const cardWithoutEnoughStock = soldCards.find(
+      (c) => Number(c.saleQuantity) > byId.get(Number(c.id)).quantity
+    );
+    if (cardWithoutEnoughStock) {
+      const inDb = byId.get(Number(cardWithoutEnoughStock.id));
+      return res.status(400).json({
+        message: messages.SALE_NOT_ENOUGH_STOCK,
+        card: { ...inDb, cardname: inDb.cardgeneral?.name ?? null },
+      });
+    }
 
-  // If al the data is correct, process the sale
-  var today = new Date();
-  today = Math.round(today / 1000);
-  for (const soldCard of soldCards) {
-    for (const cardInDb of cardsInDb.rows) {
-      if (soldCard.id == cardInDb.id) {
-        sql =
-          "INSERT INTO sale (collectionid, scryfallid, price, percent, quantity, date, conditionid, languageid, foil) VALUES (" +
-          cardInDb.collectionid +
-          ",'" +
-          cardInDb.scryfallid +
-          "'," +
-          soldCard.price +
-          "," +
-          cardInDb.percent +
-          "," +
-          soldCard.saleQuantity +
-          "," +
-          today +
-          "," +
-          cardInDb.conditionid +
-          "," +
-          cardInDb.languageid +
-          "," +
-          cardInDb.foil +
-          ")";
-        let addCards = await client.query(sql);
-        if (addCards.err) {
-          throw addCards.err;
-        }
+    // If all the data is correct, process the sale. This runs in a single
+    // transaction: previously each insert and stock update was a separate
+    // statement, so a failure part-way through left sales recorded against
+    // stock that was never decremented.
+    const today = Math.round(Date.now() / 1000);
+    await prisma.$transaction(async (tx) => {
+      for (const soldCard of soldCards) {
+        const cardInDb = byId.get(Number(soldCard.id));
+        const saleQuantity = parseInt(soldCard.saleQuantity, 10);
+
+        await tx.sale.create({
+          data: {
+            collectionid: cardInDb.collectionid,
+            scryfallid: cardInDb.scryfallid,
+            price: Number(soldCard.price),
+            percent: cardInDb.collection?.percent ?? 0,
+            quantity: saleQuantity,
+            date: today,
+            conditionid: cardInDb.conditionid,
+            languageid: cardInDb.languageid,
+            // The card table tracks printing as a `variant` string; the sale
+            // table still records a boolean.
+            foil: cardInDb.variant === "foil",
+          },
+        });
+
         // Modify the stock of the card
-        if (soldCard.saleQuantity == cardInDb.quantity) {
-          sql = "DELETE FROM card WHERE id = " + cardInDb.id;
+        if (saleQuantity === cardInDb.quantity) {
+          await tx.cardposition.deleteMany({ where: { cardid: cardInDb.id } });
+          await tx.card.delete({ where: { id: cardInDb.id } });
         } else {
-          sql =
-            "UPDATE card SET quantity = " +
-            (cardInDb.quantity - parseInt(soldCard.saleQuantity)) +
-            " WHERE id = " +
-            cardInDb.id;
-        }
-        let deleteCards = await client.query(sql);
-        if (deleteCards.err) {
-          throw deleteCards.err;
+          await tx.card.update({
+            where: { id: cardInDb.id },
+            data: { quantity: cardInDb.quantity - saleQuantity },
+          });
         }
       }
-    }
-  }
-  return res.status(201).json({ message: messages.SALE_PROCESSED });
-});
+    });
+
+    return res.status(201).json({ message: messages.SALE_PROCESSED });
+  })
+);
 
 // Return user's details based on the token
-// Copied form userRoute here to use the superuser middleware
-router.get("/me", async (req, res) => {
-  // Gets the playerId from the authentication middleware
-  var playerId = req.playerId;
-  let sql = "SELECT * FROM player WHERE id = " + playerId;
-  let users = await client.query(sql);
-  if (users.err) {
-    throw users.err;
-  }
-  // If there are no results, return error
-  if (!users.rows.length) {
-    return res.status(401).json({ message: messages.UNAUTHORIZED });
-  }
-  // If there is a user, return it
-  delete users.rows[0].passwordHash;
-  delete users.rows[0].id;
-  res.status(200).json(users.rows[0]);
-});
+// Copied from playerRoute here to use the superuser middleware
+router.get(
+  "/me",
+  asyncHandler(async (req, res) => {
+    // Gets the playerId from the authentication middleware
+    const playerId = req.playerId;
+
+    // Gets prisma from middleware
+    const prisma = req.prisma;
+
+    const user = await prisma.player.findUnique({
+      where: { id: playerId },
+      // Explicit select rather than deleting keys afterwards — the old code
+      // did `delete user.passwordHash`, which never matched the actual
+      // `passwordhash` column and shipped the bcrypt hash to the client.
+      select: {
+        username: true,
+        name: true,
+        email: true,
+        superuser: true,
+      },
+    });
+
+    // If there are no results, return error
+    if (!user) {
+      return res.status(401).json({ message: messages.UNAUTHORIZED });
+    }
+
+    // If there is a user, return it
+    return res.status(200).json(user);
+  })
+);
 
 // Return payments and sales from collections
-router.get("/pendingpayments", async (req, res) => {
-  let sql =
-    "SELECT u.name, one.collectionid, one.sales, one.commission, two.payments, (one.sales - one.commission - two.payments) AS outstanding FROM (SELECT collectionid, SUM(price) AS sales, SUM(price*percent) AS commission from sale GROUP BY collectionid) one LEFT JOIN (SELECT collectionid, SUM(ammount) AS payments from payment GROUP BY collectionid) two ON one.collectionid = two.collectionid LEFT JOIN collection o ON one.collectionid = o.id LEFT JOIN player p ON o.playerid = p.id";
-  let collections = await client.query(sql);
-  if (collections.err) {
-    throw collections.err;
-  }
-  return res.status(200).json(collections.rows);
-});
+router.get(
+  "/pendingpayments",
+  asyncHandler(async (req, res) => {
+    // Gets prisma from middleware
+    const prisma = req.prisma;
 
-module.exports = router;
+    const [sales, payments, collections] = await Promise.all([
+      prisma.sale.findMany({
+        select: { collectionid: true, price: true, percent: true },
+      }),
+      prisma.payment.groupBy({
+        by: ["collectionid"],
+        _sum: { ammount: true },
+      }),
+      prisma.collection.findMany({
+        select: { id: true, player: { select: { name: true } } },
+      }),
+    ]);
+
+    // Money is summed with Prisma's Decimal, never JS numbers — floating point
+    // turns a 3002.40 commission into 3002.3999999999996.
+    const { Decimal } = Prisma;
+    const ZERO = new Decimal(0);
+
+    // NOTE: sales and commission deliberately sum `price` without multiplying
+    // by `quantity`, matching the behaviour of the SQL this replaced. If
+    // `price` is per-unit rather than a line total, this under-reports.
+    const totals = new Map();
+    for (const sale of sales) {
+      const entry =
+        totals.get(sale.collectionid) ?? { sales: ZERO, commission: ZERO };
+      entry.sales = entry.sales.add(sale.price);
+      entry.commission = entry.commission.add(sale.price.mul(sale.percent));
+      totals.set(sale.collectionid, entry);
+    }
+
+    const paidByCollection = new Map(
+      payments.map((p) => [p.collectionid, p._sum.ammount ?? ZERO])
+    );
+    const nameByCollection = new Map(
+      collections.map((c) => [c.id, c.player?.name ?? null])
+    );
+
+    const rows = [...totals.entries()].map(([collectionid, t]) => {
+      const paid = paidByCollection.get(collectionid) ?? ZERO;
+      return {
+        name: nameByCollection.get(collectionid) ?? null,
+        collectionid,
+        sales: t.sales.toFixed(2),
+        commission: t.commission.toFixed(2),
+        payments: paid.toFixed(2),
+        outstanding: t.sales.sub(t.commission).sub(paid).toFixed(2),
+      };
+    });
+
+    return res.status(200).json(rows);
+  })
+);
+
+export default router;

@@ -2,3 +2,7 @@ node_modules/*
 node_modules
 .env
 .DS_Store
+
+/generated/prisma
+
+default-cards-20250825090922.json

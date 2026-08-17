@@ -1,14 +1,13 @@
 // Route file for getting and editing gastos
-var express = require("express");
-var router = express.Router();
-var client = require("../config/db");
-const { check, escape, validationResult } = require("express-validator");
-const bcrypt = require("bcrypt");
-var messages = require("../data/messages");
-var utils = require("../utils/utils");
+import { Router } from "express";
+var router = Router();
+import { compare } from "bcrypt";
+import messages from "../data/messages.js";
+import asyncHandler from "../middleware/asyncHandler.js";
+import { generateToken } from "../utils/utils.js";
 
 // Validate the user and return the token
-router.post("/", async (req, res) => {
+router.post("/", asyncHandler(async (req, res) => {
   // Loads the data into variables to use
   var username = req.body.username;
   var password = req.body.password;
@@ -17,43 +16,32 @@ router.post("/", async (req, res) => {
   if (!username || !password) {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
-  // Verifies that the user exists
-  let sql = "SELECT * FROM player WHERE username = '" + username + "'";
-  // let rows = client.query(sql);
-  var players = await client.query(sql);
-  if (players.err) {
-    throw players.err;
-  }
+
+  // Gets prisma from the middleware
+  const prisma = req.prisma;
+
+  const player = await prisma.player.findFirst({ where: { username } });
 
   // Verifies that the user exists
-  if (!players.rows.length) {
+  if (!player) {
     return res.status(404).json({ message: messages.USER_NOT_FOUND });
   }
+
   // Stores the superuser status of the user for the UI
-  let superuser = players.rows[0].superuser;
+  let superuser = player.superuser;
+
   // Verifies that the password is correct
-  hashedPassword = players.rows[0].passwordhash;
-  const passwordResult = await bcrypt.compare(password, hashedPassword);
+  const passwordResult = await compare(password, player.passwordhash);
   if (!passwordResult) {
     return res.status(401).json({ message: messages.INCORRECT_PASSWORD });
   }
-  // Generate the login record with the token
-  var playerId = players.rows[0].id;
-  var currentTimestamp = Math.round(new Date() / 1000);
-  var loginToken = utils.generateToken(25);
-  sql =
-    "INSERT INTO login (date, playerid, token) VALUES (" +
-    currentTimestamp +
-    "," +
-    playerId +
-    ",'" +
-    loginToken +
-    "')";
-  var loginQuery = await client.query(sql);
-  if (loginQuery.err) {
-    throw loginQuery.err;
-  }
-  return res.status(200).json({ token: loginToken, superuser });
-});
 
-module.exports = router;
+  // Generate the login record with the token
+  var token = generateToken(25);
+  const newToken = await prisma.login.create({
+    data: { date: new Date(), playerid: player.id, token },
+  });
+  return res.status(200).json({ token: newToken.token, superuser });
+}));
+
+export default router;
