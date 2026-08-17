@@ -263,7 +263,21 @@ unset and every query fails at runtime. Don't use it.
 - **Wishlist entries are card NAMES, not printings**, stored with Scryfall's
   spelling so they collate regardless of what was typed. `POST /wishlist`
   rejects a name that matches no card — a typo would otherwise sit there
-  forever matching nothing.
+  forever matching nothing. Entries never expire.
+
+- **Wishlist constraints: empty list means "any".** `versions` (scryfallids),
+  `languageids` and `conditionids` are independent, and several values in one
+  list are alternatives. So `versions: []` + `languageids: [1,2]` reads as "any
+  printing, English or Spanish". `PUT /wishlist/:id` replaces a category whole;
+  omitting a category leaves it untouched. `matches()` in `routes/wishlist.js`
+  is the single implementation — `/admin/wishlist` imports it so the shop's
+  demand view answers "does anything on the shelf satisfy what they asked for",
+  not merely "same name".
+
+- **`RESERVATION_DAYS` unset means orders never expire** — `expiryFromNow()`
+  returns null and `releaseExpiredOrders()` skips null-expiry rows. Set it to a
+  positive number to switch timeouts back on; that only affects orders placed
+  afterwards, since the deadline is stamped at creation.
 
 - **Storage lives in `storage` + `cardplacement`, not on `collection`.** A
   `storage` row is a binder, sorted box or unsorted box; `playerid` null means

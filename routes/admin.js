@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import recordSale from "../services/sales.js";
+import { matches as matchesWishlist } from "./wishlist.js";
 import {
   releaseExpiredOrders,
   nowSeconds,
@@ -434,57 +435,80 @@ router.post(
 // Wishlist demand
 // --------------------------------------------------------------------------
 
-// What customers are asking for, most-wanted first, with whether the shop can
-// already supply it. This is the list to read before taking cards on
-// consignment.
+// What customers are asking for, most-wanted first. This is the list to read
+// before taking cards on consignment.
+//
+// "In stock" has to mean "satisfies what someone actually asked for", not
+// merely "same name": two customers wanting the same card can have completely
+// different version, language and grade constraints, so a shelf copy may
+// satisfy one of them and neither of the others.
 router.get(
   "/wishlist",
   asyncHandler(async (req, res) => {
     const prisma = req.prisma;
 
-    const demand = await prisma.wishlist.groupBy({
-      by: ["name"],
-      _count: { name: true },
-      orderBy: { _count: { name: "desc" } },
+    const entries = await prisma.wishlist.findMany({
+      include: { player: { select: { id: true, name: true } } },
     });
-    if (!demand.length) return res.status(200).json([]);
+    if (!entries.length) return res.status(200).json([]);
 
-    const names = demand.map((d) => d.name);
+    const names = [...new Set(entries.map((e) => e.name))];
 
-    const [entries, cards] = await Promise.all([
-      prisma.wishlist.findMany({
-        where: { name: { in: names } },
-        include: { player: { select: { id: true, name: true } } },
-      }),
-      prisma.card.findMany({
-        where: {
-          collection: { active: true },
-          cardgeneral: { name: { in: names, mode: "insensitive" } },
-        },
-        select: { id: true, quantity: true, cardgeneral: { select: { name: true } } },
-      }),
-    ]);
+    const cards = await prisma.card.findMany({
+      where: {
+        collection: { active: true },
+        cardgeneral: { name: { in: names, mode: "insensitive" } },
+      },
+      select: {
+        id: true,
+        quantity: true,
+        scryfallid: true,
+        languageid: true,
+        conditionid: true,
+        cardgeneral: { select: { name: true } },
+      },
+    });
 
-    const wantersByName = new Map();
-    for (const entry of entries) {
-      const key = entry.name.toLowerCase();
-      if (!wantersByName.has(key)) wantersByName.set(key, []);
-      wantersByName.get(key).push(entry.player?.name ?? null);
-    }
-    const stockByName = new Map();
+    const cardsByName = new Map();
     for (const card of cards) {
       const key = (card.cardgeneral?.name ?? "").toLowerCase();
-      stockByName.set(key, (stockByName.get(key) ?? 0) + card.quantity);
+      if (!cardsByName.has(key)) cardsByName.set(key, []);
+      cardsByName.get(key).push(card);
     }
 
-    return res.status(200).json(
-      demand.map((d) => ({
-        name: d.name,
-        wanted: d._count.name,
-        wanters: wantersByName.get(d.name.toLowerCase()) ?? [],
-        inStock: stockByName.get(d.name.toLowerCase()) ?? 0,
-      }))
+    const byName = new Map();
+    for (const entry of entries) {
+      const key = entry.name.toLowerCase();
+      if (!byName.has(key)) {
+        byName.set(key, {
+          name: entry.name,
+          wanted: 0,
+          wanters: [],
+          unsatisfied: [],
+          inStock: 0,
+        });
+      }
+      const row = byName.get(key);
+      row.wanted++;
+      row.wanters.push(entry.player?.name ?? null);
+
+      const satisfying = (cardsByName.get(key) ?? []).filter((card) =>
+        matchesWishlist(entry, card)
+      );
+      if (satisfying.length) {
+        row.inStock += satisfying.reduce((n, card) => n + card.quantity, 0);
+      } else {
+        // Someone wants this and nothing on the shelf fits their filters —
+        // the case worth acting on.
+        row.unsatisfied.push(entry.player?.name ?? null);
+      }
+    }
+
+    const rows = [...byName.values()].sort(
+      (a, b) => b.unsatisfied.length - a.unsatisfied.length || b.wanted - a.wanted
     );
+
+    return res.status(200).json(rows);
   })
 );
 

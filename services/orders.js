@@ -6,11 +6,20 @@
 // a sold one and would need unwinding on every cancel or expiry. Availability
 // is therefore always `quantity - (open reservations)`, computed on read.
 
-// A pending order holds stock for this long before it releases itself.
-export const RESERVATION_DAYS = Number(process.env.RESERVATION_DAYS ?? 7);
+// How long a pending order holds stock before releasing itself.
+//
+// UNSET MEANS NEVER EXPIRE. The machinery stays in place — set
+// RESERVATION_DAYS to a positive number and holds start timing out again — but
+// the default is for a reservation to sit until someone acts on it.
+const configured = Number(process.env.RESERVATION_DAYS);
+export const RESERVATION_DAYS =
+  Number.isFinite(configured) && configured > 0 ? configured : null;
 
 export const nowSeconds = () => Math.round(Date.now() / 1000);
-export const expiryFromNow = () => nowSeconds() + RESERVATION_DAYS * 86400;
+
+// null expiry = this order never times out.
+export const expiryFromNow = () =>
+  RESERVATION_DAYS === null ? null : nowSeconds() + RESERVATION_DAYS * 86400;
 
 // Flip pending orders whose deadline has passed.
 //
@@ -19,6 +28,9 @@ export const expiryFromNow = () => nowSeconds() + RESERVATION_DAYS * 86400;
 // cron would notice, and there is nowhere reliable to run a scheduler anyway
 // (an in-process timer would fire once per dyno).
 export async function releaseExpiredOrders(prisma) {
+  // Orders stored with a null expiry are excluded by this filter, so they are
+  // untouched whether or not RESERVATION_DAYS is set now. Turning expiry on
+  // later only affects orders placed from that point.
   const { count } = await prisma.order.updateMany({
     where: { status: "pending", expires: { not: null, lt: nowSeconds() } },
     data: { status: "expired", closed: nowSeconds() },
