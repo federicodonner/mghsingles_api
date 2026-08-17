@@ -4,6 +4,11 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
+import {
+  releaseExpiredOrders,
+  reservedByCard,
+  availableOf,
+} from "../services/orders.js";
 
 const PAGE_SIZE = 50;
 const SEARCH_PAGE_SIZE = 200;
@@ -11,10 +16,14 @@ const SEARCH_PAGE_SIZE = 200;
 // Shape a card row the way both UIs read it: card fields at the top level,
 // with the cardgeneral join (name, image, set) flattened in alongside the
 // condition and language names.
-function flattenCard(card) {
+function flattenCard(card, reserved) {
   const { cardgeneral, cardcondition, cardlanguage, collection, ...rest } = card;
   return {
     ...rest,
+    // Stock is never decremented by a reservation, so the number a shopper can
+    // actually buy is quantity minus whatever is being held for someone else.
+    reserved: reserved.get(card.id) ?? 0,
+    available: availableOf(card, reserved),
     ...cardgeneral,
     cardname: cardgeneral?.name ?? null,
     condition: cardcondition?.name ?? null,
@@ -52,6 +61,9 @@ router.get(
 
     // Count and page in the database rather than loading every card and
     // slicing in JS, which is what this route used to do.
+    // Expire dead holds first, or their stock stays invisible to shoppers.
+    await releaseExpiredOrders(prisma);
+
     const [numberOfCards, cards] = await Promise.all([
       prisma.card.count({ where }),
       prisma.card.findMany({
@@ -63,10 +75,12 @@ router.get(
       }),
     ]);
 
+    const reserved = await reservedByCard(prisma, cards.map((c) => c.id));
+
     return res.status(200).json({
       numberOfCards,
       numberOfPages: Math.ceil(numberOfCards / PAGE_SIZE),
-      cards: cards.map(flattenCard),
+      cards: cards.map((card) => flattenCard(card, reserved)),
     });
   })
 );
@@ -91,6 +105,8 @@ router.get(
       cardgeneral: { name: { contains: cardName, mode: "insensitive" } },
     };
 
+    await releaseExpiredOrders(req.prisma);
+
     const cards = await req.prisma.card.findMany({
       where,
       include: CARD_INCLUDE,
@@ -102,8 +118,12 @@ router.get(
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
+    const reserved = await reservedByCard(
+      req.prisma,
+      cards.map((c) => c.id)
+    );
     const flattened = cards
-      .map(flattenCard)
+      .map((card) => flattenCard(card, reserved))
       .sort((a, b) => (a.cardname ?? "").localeCompare(b.cardname ?? ""));
 
     return res.status(200).json({

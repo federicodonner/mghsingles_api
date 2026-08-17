@@ -41,6 +41,17 @@ const messages = {
   ALL_COPIES_PLACED: "Todas las copias de esta carta ya están guardadas.",
   PLACEMENT_NOT_FOUND: "La ubicación especificada no existe.",
   PLACEMENT_REMOVED: "La carta fue retirada del contenedor.",
+  ORDER_NOT_FOUND: "El pedido especificado no existe.",
+  ORDER_NOT_PENDING: "El pedido ya fue cerrado.",
+  ORDER_REPEAT_CARDS: "Hay cartas repetidas en el pedido.",
+  ORDER_NOT_ENOUGH_STOCK:
+    "No hay stock suficiente de una de las cartas para reservarla.",
+  ORDER_CANCELLED: "El pedido fue cancelado y las cartas quedaron disponibles.",
+  ORDER_COMPLETED: "El pedido fue entregado y cobrado.",
+  CARD_NOT_AVAILABLE: "Esta carta no está a la venta.",
+  WISHLIST_REPEAT: "Esa carta ya está en tu lista de deseados.",
+  WISHLIST_NOT_FOUND: "Ese deseado no existe.",
+  WISHLIST_REMOVED: "La carta fue quitada de tu lista de deseados.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

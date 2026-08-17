@@ -237,6 +237,26 @@ unset and every query fails at runtime. Don't use it.
 - **`card` tracks printing as a `variant` string, `sale` as a `foil` boolean.**
   `POST /admin/sale` maps `variant === "foil"` when it writes the sale row.
 
+- **Reservations never decrement stock.** An `order` is a claim: availability
+  is `card.quantity` minus open `orderline` quantities, computed on read by
+  `services/orders.js`. Decrementing would make a held card indistinguishable
+  from a sold one and need unwinding on every cancel. Anything that reports
+  availability must call `releaseExpiredOrders()` first, or dead holds keep
+  stock invisible.
+
+- **Completing an order writes real sale rows.** `POST /admin/order/:id/complete`
+  goes through `services/sales.js`, the same path as a counter sale, so the
+  consignor is owed their share. An order that skipped it would quietly cheat
+  them. Stock is decremented only at that point.
+
+- **`orderline.price` is a snapshot**, captured when the order is placed, so a
+  reprice before collection cannot change what the customer was quoted.
+
+- **Wishlist entries are card NAMES, not printings**, stored with Scryfall's
+  spelling so they collate regardless of what was typed. `POST /wishlist`
+  rejects a name that matches no card — a typo would otherwise sit there
+  forever matching nothing.
+
 - **Storage lives in `storage` + `cardplacement`, not on `collection`.** A
   `storage` row is a binder, sorted box or unsorted box; `playerid` null means
   the shop owns it, and a customer's container can be taken home with

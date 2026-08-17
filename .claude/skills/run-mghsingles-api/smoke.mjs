@@ -5,11 +5,10 @@
 //   PORT=3101 node .claude/skills/run-mghsingles-api/smoke.mjs
 //   API_URL=http://localhost:3001 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
 //
-// Several routes throw and never answer (see SKILL.md Gotchas), so the server
-// is always launched with --unhandled-rejections=warn: without it the very
-// first bad request kills the process and every later probe reports a
-// connection error instead of the real problem. Broken routes here show up as
-// HANG, which is the honest result.
+// The server is launched with --unhandled-rejections=warn so that a handler
+// which somehow escapes its asyncHandler wrapper cannot kill the process
+// mid-run and make every later probe report a connection error instead of the
+// real problem. A route that throws without responding shows up as HANG.
 //
 // --seed-user creates devuser/devpass123 (+ its collection and three cards) if
 // missing, so the authenticated probes have something to authenticate as.
@@ -117,6 +116,10 @@ const PROBES = [
   ["/admin/me", true],
   ["/admin/pendingpayments", true],
   ["/storage", true],
+  ["/order", true],
+  ["/wishlist", true],
+  ["/admin/order", true],
+  ["/admin/wishlist", true],
 ];
 
 let broken = 0;

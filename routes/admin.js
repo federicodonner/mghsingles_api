@@ -5,6 +5,12 @@ import { check, validationResult } from "express-validator";
 import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
+import recordSale from "../services/sales.js";
+import {
+  releaseExpiredOrders,
+  nowSeconds,
+  expiryFromNow,
+} from "../services/orders.js";
 
 // Creates a payment
 router.post(
@@ -114,35 +120,12 @@ router.post(
     const today = Math.round(Date.now() / 1000);
     await prisma.$transaction(async (tx) => {
       for (const soldCard of soldCards) {
-        const cardInDb = byId.get(Number(soldCard.id));
-        const saleQuantity = parseInt(soldCard.saleQuantity, 10);
-
-        await tx.sale.create({
-          data: {
-            collectionid: cardInDb.collectionid,
-            scryfallid: cardInDb.scryfallid,
-            price: Number(soldCard.price),
-            percent: cardInDb.collection?.percent ?? 0,
-            quantity: saleQuantity,
-            date: today,
-            conditionid: cardInDb.conditionid,
-            languageid: cardInDb.languageid,
-            // The card table tracks printing as a `variant` string; the sale
-            // table still records a boolean.
-            foil: cardInDb.variant === "foil",
-          },
+        await recordSale(tx, {
+          card: byId.get(Number(soldCard.id)),
+          quantity: parseInt(soldCard.saleQuantity, 10),
+          price: Number(soldCard.price),
+          date: today,
         });
-
-        // Modify the stock of the card
-        if (saleQuantity === cardInDb.quantity) {
-          await tx.cardplacement.deleteMany({ where: { cardid: cardInDb.id } });
-          await tx.card.delete({ where: { id: cardInDb.id } });
-        } else {
-          await tx.card.update({
-            where: { id: cardInDb.id },
-            data: { quantity: cardInDb.quantity - saleQuantity },
-          });
-        }
       }
     });
 
@@ -247,6 +230,261 @@ router.get(
     });
 
     return res.status(200).json(rows);
+  })
+);
+
+// --------------------------------------------------------------------------
+// Customer reservations
+// --------------------------------------------------------------------------
+
+const ORDER_LINE_INCLUDE = {
+  card: {
+    include: {
+      cardgeneral: true,
+      cardcondition: { select: { name: true } },
+      cardlanguage: { select: { name: true } },
+    },
+  },
+};
+
+function describeOrder(order) {
+  return {
+    id: order.id,
+    status: order.status,
+    created: order.created,
+    expires: order.expires,
+    closed: order.closed,
+    note: order.note,
+    player: order.player
+      ? { id: order.player.id, name: order.player.name }
+      : null,
+    lines: order.orderline.map((line) => ({
+      id: line.id,
+      cardid: line.cardid,
+      quantity: line.quantity,
+      price: line.price,
+      name: line.card?.cardgeneral?.name ?? null,
+      cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
+      image: line.card?.cardgeneral?.image ?? null,
+      variant: line.card?.variant ?? null,
+      condition: line.card?.cardcondition?.name ?? null,
+      language: line.card?.cardlanguage?.name ?? null,
+    })),
+    total: order.orderline
+      .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
+      .toFixed(2),
+  };
+}
+
+// The shop's queue. `?status=` filters; pending first by default.
+router.get(
+  "/order",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    await releaseExpiredOrders(prisma);
+
+    const where = {};
+    if (typeof req.query.status === "string") where.status = req.query.status;
+
+    const orders = await prisma.order.findMany({
+      where,
+      include: {
+        orderline: { include: ORDER_LINE_INCLUDE },
+        player: { select: { id: true, name: true } },
+      },
+      orderBy: [{ status: "asc" }, { created: "asc" }],
+    });
+
+    return res.status(200).json(orders.map(describeOrder));
+  })
+);
+
+// The customer came in and paid.
+//
+// This is a real sale: it writes sale rows through the same service the counter
+// uses, so the consignor is owed their share exactly as if it had been sold
+// over the counter. Stock is only decremented here — a reservation never
+// touched it.
+router.post(
+  "/order/:orderId/complete",
+  [check("orderId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.orderId, 10);
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        orderline: {
+          include: {
+            card: {
+              include: {
+                cardgeneral: { select: { name: true } },
+                collection: { select: { percent: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!order) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    if (order.status !== "pending") {
+      return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
+    }
+
+    // Stock can have moved since the reservation — a counter sale of the same
+    // card does not know about holds. Re-check before committing.
+    const short = order.orderline.find(
+      (line) => !line.card || line.quantity > line.card.quantity
+    );
+    if (short) {
+      return res.status(400).json({
+        message: messages.ORDER_NOT_ENOUGH_STOCK,
+        card: {
+          id: short.cardid,
+          name: short.card?.cardgeneral?.name ?? null,
+          available: short.card?.quantity ?? 0,
+        },
+      });
+    }
+
+    const today = nowSeconds();
+    await prisma.$transaction(async (tx) => {
+      for (const line of order.orderline) {
+        await recordSale(tx, {
+          card: line.card,
+          quantity: line.quantity,
+          price: Number(line.price),
+          date: today,
+        });
+      }
+      await tx.order.update({
+        where: { id },
+        data: { status: "completed", closed: today },
+      });
+    });
+
+    return res.status(200).json({ message: messages.ORDER_COMPLETED });
+  })
+);
+
+// Cancel a reservation on the customer's behalf, releasing the stock.
+router.post(
+  "/order/:orderId/cancel",
+  [check("orderId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.orderId, 10);
+
+    const order = await prisma.order.findUnique({ where: { id } });
+    if (!order) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    if (order.status !== "pending") {
+      return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
+    }
+
+    await prisma.order.update({
+      where: { id },
+      data: { status: "cancelled", closed: nowSeconds() },
+    });
+    return res.status(200).json({ message: messages.ORDER_CANCELLED });
+  })
+);
+
+// Give a customer more time rather than making them re-reserve.
+router.post(
+  "/order/:orderId/extend",
+  [check("orderId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.orderId, 10);
+
+    const order = await prisma.order.findUnique({ where: { id } });
+    if (!order) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    if (order.status !== "pending") {
+      return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
+    }
+
+    const updated = await prisma.order.update({
+      where: { id },
+      data: { expires: expiryFromNow() },
+    });
+    return res.status(200).json({ expires: updated.expires });
+  })
+);
+
+// --------------------------------------------------------------------------
+// Wishlist demand
+// --------------------------------------------------------------------------
+
+// What customers are asking for, most-wanted first, with whether the shop can
+// already supply it. This is the list to read before taking cards on
+// consignment.
+router.get(
+  "/wishlist",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+
+    const demand = await prisma.wishlist.groupBy({
+      by: ["name"],
+      _count: { name: true },
+      orderBy: { _count: { name: "desc" } },
+    });
+    if (!demand.length) return res.status(200).json([]);
+
+    const names = demand.map((d) => d.name);
+
+    const [entries, cards] = await Promise.all([
+      prisma.wishlist.findMany({
+        where: { name: { in: names } },
+        include: { player: { select: { id: true, name: true } } },
+      }),
+      prisma.card.findMany({
+        where: {
+          collection: { active: true },
+          cardgeneral: { name: { in: names, mode: "insensitive" } },
+        },
+        select: { id: true, quantity: true, cardgeneral: { select: { name: true } } },
+      }),
+    ]);
+
+    const wantersByName = new Map();
+    for (const entry of entries) {
+      const key = entry.name.toLowerCase();
+      if (!wantersByName.has(key)) wantersByName.set(key, []);
+      wantersByName.get(key).push(entry.player?.name ?? null);
+    }
+    const stockByName = new Map();
+    for (const card of cards) {
+      const key = (card.cardgeneral?.name ?? "").toLowerCase();
+      stockByName.set(key, (stockByName.get(key) ?? 0) + card.quantity);
+    }
+
+    return res.status(200).json(
+      demand.map((d) => ({
+        name: d.name,
+        wanted: d._count.name,
+        wanters: wantersByName.get(d.name.toLowerCase()) ?? [],
+        inStock: stockByName.get(d.name.toLowerCase()) ?? 0,
+      }))
+    );
   })
 );
 

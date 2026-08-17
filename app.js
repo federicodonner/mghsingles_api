@@ -33,6 +33,8 @@ import { authentication, superuser } from "./middleware/authentication.js";
 app.use("/collection", authentication);
 app.use("/sale", authentication);
 app.use("/player/me", authentication);
+app.use("/order", authentication);
+app.use("/wishlist", authentication);
 app.put("/player", authentication);
 app.put("/player/password", authentication);
 // NOTE: /card is deliberately NOT listed here. Registering auth by path from
@@ -73,6 +75,13 @@ app.use("/store", storeRoute);
 // Routes for admin operations
 import adminRoute from "./routes/admin.js";
 app.use("/admin", adminRoute);
+
+// Routes for customer reservations and wishlists
+import orderRoute from "./routes/order.js";
+app.use("/order", orderRoute);
+
+import wishlistRoute from "./routes/wishlist.js";
+app.use("/wishlist", wishlistRoute);
 
 // Routes for physical storage (binders and boxes)
 import storageRoute from "./routes/storage.js";
