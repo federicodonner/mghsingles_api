@@ -9,7 +9,8 @@
     "start-dev": "nodemon -r dotenv/config",
     "start": "node app.js",
     "sync:scryfall": "node -r dotenv/config scripts/syncScryfall.mjs",
-    "match:wishlists": "node -r dotenv/config scripts/matchWishlists.mjs"
+    "match:wishlists": "node -r dotenv/config scripts/matchWishlists.mjs",
+    "sync:prices": "node -r dotenv/config scripts/syncPrices.mjs"
   },
   "repository": {
     "type": "git",

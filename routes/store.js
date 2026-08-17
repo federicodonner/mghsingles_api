@@ -18,13 +18,22 @@ const SEARCH_PAGE_SIZE = 200;
 // condition and language names.
 function flattenCard(card, reserved) {
   const { cardgeneral, cardcondition, cardlanguage, collection, ...rest } = card;
+  // The CardKingdom quote for THIS printing and finish, so the shop can price
+  // against a reference rather than from memory. Reference only — it never
+  // overwrites what the shop is actually asking.
+  const reference = (cardgeneral?.cardprice ?? []).find(
+    (row) => row.finish === (card.variant || "nonfoil")
+  );
   return {
     ...rest,
+    ckretail: reference?.retail ?? null,
+    ckbuylist: reference?.buylist ?? null,
+    ckpricedate: reference?.pricedate ?? null,
     // Stock is never decremented by a reservation, so the number a shopper can
     // actually buy is quantity minus whatever is being held for someone else.
     reserved: reserved.get(card.id) ?? 0,
     available: availableOf(card, reserved),
-    ...cardgeneral,
+    ...(cardgeneral ? { ...cardgeneral, cardprice: undefined } : {}),
     cardname: cardgeneral?.name ?? null,
     condition: cardcondition?.name ?? null,
     language: cardlanguage?.name ?? null,
@@ -35,7 +44,9 @@ function flattenCard(card, reserved) {
 }
 
 const CARD_INCLUDE = {
-  cardgeneral: true,
+  cardgeneral: {
+    include: { cardprice: { where: { source: "cardkingdom" } } },
+  },
   cardcondition: { select: { name: true } },
   cardlanguage: { select: { name: true } },
   collection: { select: { id: true, percent: true, player: { select: { name: true } } } },

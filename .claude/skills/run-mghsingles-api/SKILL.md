@@ -144,6 +144,58 @@ psql -d mghsingles -c "SELECT started,bulkupdated,cards,skipped,ok,error FROM sy
 **On a fresh database, run it once before the app is useful** — `cardgeneral`
 is empty until it does, so nothing can be stocked, searched or wishlisted.
 
+## CardKingdom price sync (MTGJSON)
+
+Reference prices for every printing, from MTGJSON's daily feed.
+
+```bash
+npm run sync:prices
+```
+
+Verified: **143,326 price rows in ~6s**, covering 93,492 of 116,712 printings.
+
+The design turns on an asymmetry between the two files it needs:
+
+| file | size | changes |
+|---|---|---|
+| `AllPricesToday.json.gz` | 5 MB | every day |
+| `csv/cardIdentifiers.csv.gz` | 15 MB | never, for an existing printing |
+
+So the MTGJSON uuid is stored once on `cardgeneral.mtgjsonuuid` and the daily
+run only fetches the small file. The map is refetched **only when the number of
+unmapped printings goes up** — ~6,300 printings (tokens, a long tail of promos)
+are simply not in MTGJSON, so "anything unmapped" would otherwise trigger a
+15 MB download every night to map nothing. `--force` refetches anyway.
+
+`AllIdentifiers.json.gz` is 217 MB and carries the same mapping; the CSV is the
+one to use.
+
+**Where it runs.** The logic is in `services/priceSync.mjs` as a plain function
+taking a PrismaClient, with two thin entry points: `scripts/syncPrices.mjs` for
+the CLI and `lambda/priceSync.mjs` for AWS. It talks to the database
+**directly** rather than posting to the API — ~143k upserts over HTTP would need
+batching and auth, would outlive API Gateway's 29s limit, and would make price
+night compete with serving customers in the web dyno.
+
+Deploying the Lambda: set `DATABASE_URL`, allow 5 minutes, 512 MB. Prisma ships
+a per-platform query engine, so either add `binaryTargets = ["native",
+"rhel-openssl-3.0.x"]` to `schema.prisma` or build a container image on Amazon
+Linux. Full notes are in the header of `lambda/priceSync.mjs`.
+
+Prices land in `cardprice`, one row per printing per finish per source:
+- `retail` — what CardKingdom sells at; the reference for pricing stock
+- `buylist` — what it pays; the reference for taking cards in
+
+A row can have a buylist and no retail, meaning CK will buy the card but has
+none in stock. Nothing writes `card.price` — the shop's asking price stays the
+shop's decision, and the reference is shown beside it in the sell screen.
+
+Freshness for all three jobs:
+
+```bash
+curl -s http://localhost:3101/admin/syncstatus -H "Authorization: Bearer $TOK"
+```
+
 ## Wishlist matching
 
 Finds cards in stock that satisfy somebody's wishlist, so the shop can set them

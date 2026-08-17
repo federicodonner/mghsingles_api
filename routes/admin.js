@@ -811,4 +811,47 @@ router.post(
   })
 );
 
+// How fresh the ingested data is. Cheap to call; reads only the run log.
+router.get(
+  "/syncstatus",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+
+    const sources = ["cardkingdom_prices", "default_cards", "wishlist_match"];
+    const runs = await Promise.all(
+      sources.map((source) =>
+        prisma.syncrun.findFirst({
+          where: { source },
+          orderBy: { started: "desc" },
+        })
+      )
+    );
+
+    const [pricedPrintings, totalPrintings] = await Promise.all([
+      prisma.cardprice.findMany({
+        where: { source: "cardkingdom" },
+        distinct: ["scryfallid"],
+        select: { scryfallid: true },
+      }),
+      prisma.cardgeneral.count(),
+    ]);
+
+    return res.status(200).json({
+      runs: sources.map((source, i) => ({
+        source,
+        started: runs[i]?.started ?? null,
+        ok: runs[i]?.ok ?? null,
+        skipped: runs[i]?.skipped ?? null,
+        rows: runs[i]?.cards ?? null,
+        pricedate: runs[i]?.bulkupdated ?? null,
+        error: runs[i]?.error ?? null,
+      })),
+      prices: {
+        printingsPriced: pricedPrintings.length,
+        printingsTotal: totalPrintings,
+      },
+    });
+  })
+);
+
 export default router;
