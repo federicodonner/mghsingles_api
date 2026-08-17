@@ -4,6 +4,7 @@
 //   node -r dotenv/config scripts/syncScryfall.mjs
 //   node -r dotenv/config scripts/syncScryfall.mjs --limit 2000   # quick check
 //   node -r dotenv/config scripts/syncScryfall.mjs --dry-run
+//   node -r dotenv/config scripts/syncScryfall.mjs --force      # ignore the skip
 //
 // Meant to run nightly (see SKILL.md). The point is to keep card names, images,
 // set data and printing variants locally so the apps never call Scryfall on a
@@ -17,6 +18,12 @@
 //
 // Rows are never deleted. `card` and `sale` both reference cardgeneral, so a
 // printing that vanishes upstream stays put rather than breaking a sale record.
+//
+// Scryfall regenerates the bulk files once a day (observed: all seven within
+// ~17 minutes of 09:05 UTC), and stamps each with an id that changes only on
+// regeneration. This records every run in `syncrun` and skips outright when the
+// id has not moved, so scheduling it daily — or more often — costs one small
+// HTTP request on the days there is nothing new.
 import { PrismaClient } from "@prisma/client";
 import { createGunzip } from "node:zlib";
 import { Readable } from "node:stream";
@@ -35,6 +42,7 @@ const BATCH = 500; // rows per INSERT; 500 x 16 params stays well under Postgres
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
+const FORCE = args.includes("--force");
 const LIMIT = (() => {
   const i = args.indexOf("--limit");
   return i === -1 ? Infinity : parseInt(args[i + 1], 10);
@@ -190,6 +198,28 @@ async function main() {
   if (!entry) throw new Error("no default_cards entry in the bulk index");
   log(`bulk: default_cards updated ${entry.updated_at}`);
 
+  // Nothing new upstream? Then there is nothing to download. This is the whole
+  // reason a daily schedule is cheap.
+  const last = await prisma.syncrun.findFirst({
+    where: { source: "default_cards", ok: true, skipped: false },
+    orderBy: { started: "desc" },
+  });
+  if (!FORCE && !DRY_RUN && last?.bulkid === entry.id) {
+    log(`unchanged since ${last.bulkupdated} — nothing to do (--force to override)`);
+    await prisma.syncrun.create({
+      data: {
+        source: "default_cards",
+        bulkid: entry.id,
+        bulkupdated: entry.updated_at,
+        skipped: true,
+        ok: true,
+        started: Math.round(started / 1000),
+        finished: Math.round(Date.now() / 1000),
+      },
+    });
+    return;
+  }
+
   if (!DRY_RUN) await ensureIndexes();
   const knownSets = await syncSets();
 
@@ -240,14 +270,44 @@ async function main() {
     `${DRY_RUN ? "[dry run] " : ""}cards: ${written} written, ${skipped} skipped, ` +
       `${seen} read in ${secs}s`
   );
+
+  if (!DRY_RUN) {
+    await prisma.syncrun.create({
+      data: {
+        source: "default_cards",
+        bulkid: entry.id,
+        bulkupdated: entry.updated_at,
+        cards: written,
+        sets: knownSets.size,
+        ok: true,
+        started: Math.round(started / 1000),
+        finished: Math.round(Date.now() / 1000),
+      },
+    });
+  }
   if (missingSets.size) {
     log(`  sets missing from /sets, cards skipped: ${[...missingSets].join(", ")}`);
   }
 }
 
 main()
-  .catch((err) => {
+  .catch(async (err) => {
     console.error("scryfall sync failed:", err);
     process.exitCode = 1;
+    // Record the failure, otherwise a scheduler job that dies every night looks
+    // exactly like one that never ran.
+    try {
+      await prisma.syncrun.create({
+        data: {
+          source: "default_cards",
+          ok: false,
+          error: String(err?.message ?? err).slice(0, 500),
+          started: Math.round(Date.now() / 1000),
+          finished: Math.round(Date.now() / 1000),
+        },
+      });
+    } catch {
+      // The database is the thing that failed; nothing more to do.
+    }
   })
   .finally(() => prisma.$disconnect());

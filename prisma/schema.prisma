@@ -258,3 +258,29 @@ enum orderstatus {
   cancelled
   expired
 }
+
+/// One row per Scryfall sync attempt.
+///
+/// Exists so a scheduled run can tell whether there is anything new: Scryfall
+/// stamps each bulk file with an id that changes only when it is regenerated,
+/// so a run whose id matches the last successful one has nothing to do and
+/// skips the 77MB download entirely. That is what makes a frequent schedule
+/// cheap rather than wasteful.
+///
+/// It doubles as the answer to "when did this last run, and did it work?",
+/// which a Heroku Scheduler job cannot otherwise tell you.
+model syncrun {
+  id          Int      @id @default(autoincrement())
+  source      String
+  bulkid      String?
+  bulkupdated String?
+  cards       Int      @default(0)
+  sets        Int      @default(0)
+  skipped     Boolean  @default(false)
+  ok          Boolean  @default(false)
+  error       String?
+  started     Int
+  finished    Int?
+
+  @@index([source, ok, started])
+}

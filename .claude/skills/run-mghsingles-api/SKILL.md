@@ -113,9 +113,36 @@ Idempotent — it upserts on `scryfallid` and never deletes, because `card` and
 `sale` both reference `cardgeneral` and a printing withdrawn upstream would
 otherwise break a sale record.
 
-**Nightly:** this is a plain script with no scheduler inside it, so run it from
-cron or Heroku Scheduler (`npm run sync:scryfall`). Do not add an in-process
-timer — it would fire once per dyno.
+**It skips itself when there is nothing new.** Scryfall stamps each bulk file
+with an id that changes only on regeneration; the script records every run in
+`syncrun` and exits early if that id has not moved. Measured: **17s** for a real
+sync, **0.8s** to decide there is nothing to do. `--force` re-imports anyway.
+
+**Scheduling.** Scryfall regenerates the bulk files once a day — observed, all
+seven within ~17 minutes of **09:05 UTC**. Run this daily at **10:00 UTC**,
+which is comfortably after that and 07:00 in Montevideo:
+
+```bash
+npm run sync:scryfall
+```
+
+Heroku Scheduler, daily at 10:00 UTC, is the intended home. Do not add an
+in-process timer — it would fire once per dyno. Running more often than daily is
+harmless thanks to the skip, but pointless: the source only changes once a day.
+
+Run it **manually on set-release and spoiler days** rather than waiting for the
+schedule — the shop cannot stock or wishlist a card that is not in `cardgeneral`
+yet, and that is the one time freshness actually bites.
+
+The script exits non-zero on failure and records the error in `syncrun`, so a
+scheduler that has been failing every night is visible rather than silent:
+
+```bash
+psql -d mghsingles -c "SELECT started,bulkupdated,cards,skipped,ok,error FROM syncrun ORDER BY id DESC LIMIT 10;"
+```
+
+**On a fresh database, run it once before the app is useful** — `cardgeneral`
+is empty until it does, so nothing can be stocked, searched or wishlisted.
 
 ## Run (agent path)
 
