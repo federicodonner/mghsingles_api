@@ -75,16 +75,20 @@ UPDATE collection SET name='Main binder', active=true
  WHERE playerid=(SELECT id FROM player WHERE username='devuser');
 INSERT INTO card (scryfallid,conditionid,languageid,quantity,collectionid,variant,approved,price)
 SELECT v.sfid,v.cond,1,v.qty,c.id,v.variant,true,v.price
-FROM (VALUES ('d573ef03-4730-45aa-93dd-e45ac1dbaf4a',1,1,'normal',4.50),
-             ('73542493-cd0b-4bb7-a5b8-8f889c76e4d6',1,8,'foil',0.75),
-             ('0df55e3f-14de-46ef-b6b1-616618724d9e',1,2,'normal',3.25),
-             ('c4300d24-1cae-4dd5-be7e-38cc677cf5bd',2,1,'foil',1.10)) AS v(sfid,cond,qty,variant,price)
+FROM (VALUES ('d573ef03-4730-45aa-93dd-e45ac1dbaf4a',1,1,'nonfoil',4.50),
+             ('73542493-cd0b-4bb7-a5b8-8f889c76e4d6',1,8,'nonfoil',0.75),
+             ('0df55e3f-14de-46ef-b6b1-616618724d9e',1,2,'nonfoil',3.25),
+             ('c4300d24-1cae-4dd5-be7e-38cc677cf5bd',2,1,'nonfoil',1.10),
+             -- pf26 #8 is one of the few Llanowar Elves printings that really
+             -- is foil-only, so the UI has genuine foil stock to show.
+             ('cb49d52e-85ce-4f79-bfc3-0e312e6e161f',1,2,'foil',3.50)) AS v(sfid,cond,qty,variant,price)
 CROSS JOIN (SELECT id FROM collection
             WHERE playerid=(SELECT id FROM player WHERE username='devuser') LIMIT 1) c;"
 ```
 
 Those are real Scryfall ids seeded by `seed.sql`, so the store renders actual
-card images.
+card images. The finishes match what each printing was actually produced in —
+`POST /card` rejects anything else.
 
 ## Scryfall sync
 
@@ -318,6 +322,24 @@ unset and every query fails at runtime. Don't use it.
   ~117k rows is a sequential scan (~56ms and growing); with the GIN trigram
   index it is ~0.7ms. Prisma cannot express that index and there are no
   migration files, so `syncScryfall.mjs` creates it idempotently on every run.
+
+- **Finishes belong to the PRINTING, not to the shop's choice.**
+  `cardgeneral.finishes` comes straight from Scryfall: `nonfoil`, `foil`,
+  `etched`. Half of all printings exist in only one — 38% nonfoil-only, 12%
+  foil-only — so `POST /card` rejects a copy whose finish its printing was never
+  produced in. `services/finishes.js` holds the vocabulary; nothing should
+  hard-code a finish string.
+
+- **`nonfoil` and `foil` share a printing and therefore share an image**, which
+  is why finish is a separate control rather than another version tile. `etched`
+  is usually its own printing with its own collector number and art (892 of
+  1,218 cases), so it shows up as a tile of its own — but 326 printings do list
+  `etched` alongside another finish, so both cases have to work.
+
+- **The old vocabulary was `normal`/`foil`/`foil-etched`,** and non-foil was
+  written as `""` by AddCard and `"normal"` by the seed. It is now Scryfall's
+  vocabulary throughout, `card.variant` is NOT NULL defaulting to `nonfoil`, and
+  a one-off migration mapped the old values across.
 
 - **Scryfall blocks requests without a `User-Agent`.** `fetch` with no headers
   gets an empty body and no error — fields silently come back `undefined`. Send

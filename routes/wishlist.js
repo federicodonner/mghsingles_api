@@ -11,6 +11,8 @@
 //   any version, NM or EX, ES or EN    -> conditionids [1,2], languageids [1,2]
 //   any version, foil only             -> variants ["foil"]
 //
+// Finish names are Scryfall's: nonfoil, foil, etched.
+//
 // Entries never expire.
 import { Router } from "express";
 var router = Router();
@@ -35,8 +37,7 @@ function readList(value, cast) {
 const readIds = (v) => readList(v, (x) => parseInt(x, 10));
 const readStrings = (v) => readList(v, (x) => String(x).trim());
 
-// card.variant is a free-form nullable string; null means an ordinary card.
-const DEFAULT_VARIANT = "normal";
+import { DEFAULT_FINISH } from "../services/finishes.js";
 
 // Does this card satisfy the entry? Each category is checked independently and
 // an empty list is a wildcard.
@@ -53,11 +54,11 @@ function matches(entry, card) {
   ) {
     return false;
   }
-  // A card row with no finish recorded is a plain, non-foil card, so it should
-  // satisfy a "normal" filter rather than nothing at all.
+  // `variant` is required now, but a legacy row could still be empty; treat
+  // that as an ordinary card rather than as matching nothing.
   if (
     entry.variants.length &&
-    !entry.variants.includes(card.variant || DEFAULT_VARIANT)
+    !entry.variants.includes(card.variant || DEFAULT_FINISH)
   ) {
     return false;
   }
@@ -112,6 +113,24 @@ async function attachAvailability(prisma, entries) {
     byName.get(key).push(card);
   }
 
+  // Which finishes this card exists in AT ALL, across every printing — so the
+  // editor never offers "foil" for a card that has no foil printing.
+  const printings = await prisma.cardgeneral.findMany({
+    where: { name: { in: entries.map((e) => e.name), mode: "insensitive" } },
+    select: { name: true, finishes: true },
+  });
+  const finishesByName = new Map();
+  for (const printing of printings) {
+    const key = printing.name.toLowerCase();
+    if (!finishesByName.has(key)) finishesByName.set(key, new Set());
+    const set = finishesByName.get(key);
+    for (const finish of printing.finishes.length
+      ? printing.finishes
+      : [DEFAULT_FINISH]) {
+      set.add(finish);
+    }
+  }
+
   return entries.map((entry) => {
     const candidates = byName.get(entry.name.toLowerCase()) ?? [];
     const inStock = [];
@@ -133,6 +152,7 @@ async function attachAvailability(prisma, entries) {
       languageids: entry.languageids,
       conditionids: entry.conditionids,
       variants: entry.variants,
+      availableFinishes: [...(finishesByName.get(entry.name.toLowerCase()) ?? [])],
       inStock,
       excluded,
     };
@@ -190,6 +210,8 @@ router.get(
         collectornumber: true,
         image: true,
         releasedatyear: true,
+        // Which finishes THIS printing exists in, so the picker can say so.
+        finishes: true,
       },
       orderBy: [{ releasedatyear: "asc" }, { cardsetcode: "asc" }],
     });

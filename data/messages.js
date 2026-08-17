@@ -52,6 +52,8 @@ const messages = {
   WISHLIST_REPEAT: "Esa carta ya está en tu lista de deseados.",
   WISHLIST_NOT_FOUND: "Ese deseado no existe.",
   WISHLIST_REMOVED: "La carta fue quitada de tu lista de deseados.",
+  FINISH_NOT_AVAILABLE:
+    "Esta versión de la carta no existe en esa terminación.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

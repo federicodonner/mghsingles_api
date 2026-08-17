@@ -14,7 +14,10 @@ model card {
   languageid    Int
   quantity      Int
   collectionid  Int            @default(autoincrement())
-  variant       String?
+  /// Which finish this physical copy is, in Scryfall's vocabulary: nonfoil,
+  /// foil or etched. Required — it used to be nullable and held a mix of NULL,
+  /// "" and "normal" for the same thing.
+  variant       String         @default("nonfoil")
   approved      Boolean        @default(true)
   price         Float?
   priceupdate   Int?
@@ -50,8 +53,15 @@ model cardgeneral {
   color           String?
   rarity          String?
   collectornumber String?
+  /// Which finishes this printing was actually produced in, straight from
+  /// Scryfall's `finishes`: nonfoil, foil, etched. Half of all printings exist
+  /// in only one of them — 38% are nonfoil-only and 12% are foil-only — so this
+  /// is what stops the shop recording a foil copy of a card that has no foil,
+  /// or offering a foil filter for one.
+  finishes        String[]
   priceusd        Decimal? @db.Decimal(10, 2)
   priceusdfoil    Decimal? @db.Decimal(10, 2)
+  priceusdetched  Decimal? @db.Decimal(10, 2)
   priceeur        Decimal? @db.Decimal(10, 2)
   pricesupdated   Int?
   cardset         cardset @relation(fields: [cardsetcode], references: [cardset])

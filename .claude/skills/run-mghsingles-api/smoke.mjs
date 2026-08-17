@@ -153,7 +153,12 @@ if (token) {
     headers: { Authorization: `Bearer ${token}` },
   }).then((r) => r.json());
   const collectionId = Array.isArray(collections) ? collections[0]?.id : null;
-  const scryfallid = collections?.[0]?.card?.[0]?.scryfallid;
+  const seedCard = collections?.[0]?.card?.[0];
+  const scryfallid = seedCard?.scryfallid;
+  // Take a finish from the PRINTING rather than from the stored copy: POST
+  // /card rejects a finish the printing was never produced in, and a copy
+  // recorded before that check existed may itself be wrong.
+  const variant = seedCard?.cardgeneral?.finishes?.[0] ?? "nonfoil";
 
   if (!collectionId || !scryfallid) {
     console.log("SKIP  write routes        no seeded collection/card to work with");
@@ -166,7 +171,7 @@ if (token) {
         quantity: 1,
         condition: 3,
         language: 4,
-        variant: "normal",
+        variant,
       }),
     });
     console.log(

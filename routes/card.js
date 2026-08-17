@@ -7,6 +7,7 @@ import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
+import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 
 async function getExternalUrl(path) {
   const options = {
@@ -276,24 +277,8 @@ router.get("/modifiers", asyncHandler(async (req, res) => {
   const conditions = await prisma.cardcondition.findMany();
   const languages = await prisma.cardlanguage.findMany();
 
-  // Finishes have no lookup table — card.variant is a free-form nullable
-  // string. Offer the canonical set plus anything the shop has actually used,
-  // so a finish that only exists in stock still appears, and the common ones
-  // appear even when nothing is stocked.
-  const used = await prisma.card.findMany({
-    distinct: ["variant"],
-    select: { variant: true },
-  });
-  const variants = [
-    ...new Set([
-      "normal",
-      "foil",
-      "foil-etched",
-      ...used.map((row) => row.variant).filter(Boolean),
-    ]),
-  ];
-
-  return res.status(200).json({ conditions, languages, variants });
+  // Finishes have no lookup table; they are Scryfall's fixed vocabulary.
+  return res.status(200).json({ conditions, languages, variants: FINISHES });
 }));
 
 // Returns the sets
@@ -370,9 +355,11 @@ router.post(
     const quantity = Math.floor(req.body.quantity);
     const conditionid = parseInt(req.body.condition);
     const languageid = parseInt(req.body.language);
-    // `variant` is a string ("normal" / "foil"), not a number — parseInt on it
-    // yielded NaN and Prisma rejected the write.
-    const variant = req.body.variant ? String(req.body.variant) : "normal";
+    // `variant` is a finish name, not a number — parseInt on it yielded NaN and
+    // Prisma rejected the write.
+    const variant = req.body.variant
+      ? String(req.body.variant).trim()
+      : DEFAULT_FINISH;
 
     // Gets prisma from middleware
     const prisma = req.prisma;
@@ -395,6 +382,16 @@ router.post(
       // If there are no results, return error
       if (!cardsInCardsGeneral) {
         return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+
+      // Half of all printings exist in only one finish, so a copy cannot claim
+      // a finish its printing was never produced in.
+      const available = finishesFor(cardsInCardsGeneral);
+      if (!available.includes(variant)) {
+        return res.status(400).json({
+          message: messages.FINISH_NOT_AVAILABLE,
+          finishes: available,
+        });
       }
 
       // Tries to find the card in the collection, if it's there

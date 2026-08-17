@@ -1,3 +1,5 @@
+import { isFoil } from "./finishes.js";
+
 // Recording a sale, shared by the counter (POST /admin/sale) and by completing
 // a customer's reservation (POST /admin/order/:id/complete).
 //
@@ -21,8 +23,9 @@ export async function recordSale(tx, { card, quantity, price, date }) {
       date,
       conditionid: card.conditionid,
       languageid: card.languageid,
-      // `card` tracks printing as a variant string; `sale` still uses a boolean.
-      foil: card.variant === "foil",
+      // `card` records a finish; `sale` still carries a plain boolean, so any
+      // kind of foil (including etched) counts as foil here.
+      foil: isFoil(card.variant),
     },
   });
 

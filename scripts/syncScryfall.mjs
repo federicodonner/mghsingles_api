@@ -129,9 +129,12 @@ function toRow(card, now) {
     card.rarity ?? null,
     card.collector_number ?? null,
     card.released_at ? Number(card.released_at.slice(0, 4)) : null,
+    // Which finishes this printing exists in: nonfoil / foil / etched.
+    card.finishes ?? [],
     // Prices ride along free in the same payload. Nothing reads them yet.
     card.prices?.usd ?? null,
     card.prices?.usd_foil ?? null,
+    card.prices?.usd_etched ?? null,
     card.prices?.eur ?? null,
     now,
   ];
@@ -141,7 +144,8 @@ const COLUMNS = [
   "scryfallid", "name", "cardsetcode", "cardsetname", "image",
   "borderless", "showcase", "phyrexian", "extendedart", "retroframe",
   "boxtopper", "color", "rarity", "collectornumber", "releasedatyear",
-  "priceusd", "priceusdfoil", "priceeur", "pricesupdated",
+  "finishes",
+  "priceusd", "priceusdfoil", "priceusdetched", "priceeur", "pricesupdated",
 ];
 
 // Scryfall sends prices as strings ("0.35"). Cast them in SQL rather than
@@ -150,7 +154,10 @@ const COLUMNS = [
 const CASTS = {
   priceusd: "::numeric",
   priceusdfoil: "::numeric",
+  priceusdetched: "::numeric",
   priceeur: "::numeric",
+  // Node gives Postgres a JS array; tell it the column type explicitly.
+  finishes: "::text[]",
 };
 
 async function flush(rows) {
