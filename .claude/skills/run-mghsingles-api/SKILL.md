@@ -9,8 +9,9 @@ Express 4 + Prisma 6 + PostgreSQL. Single entrypoint `app.js`, listens on
 `PORT` (default **3001**). No test suite (`npm test` exits 1 by design).
 
 The agent path is `.claude/skills/run-mghsingles-api/smoke.mjs`: it launches
-the server, logs in, probes every route and prints which ones answer. All
-twelve currently return 200.
+the server, logs in, probes every route and prints which ones answer, then
+adds and deletes a card so the write paths are exercised too. All 17 currently
+return 200.
 
 All paths below are relative to `mghsingles_api/`.
 
@@ -52,9 +53,8 @@ psql -d mghsingles -v ON_ERROR_STOP=1 -f .claude/skills/run-mghsingles-api/seed.
 ```
 
 Do **not** load `mghsingles.psql`. It predates the current `schema.prisma`
-(it has `card.foil`, lacks `card.variant`/`price`/`ckuri`, and has no
-`cardposition` table), and every table in it is empty except the two lookup
-tables that `seed.sql` reproduces.
+(it has `card.foil` and lacks `card.variant`/`price`/`ckuri`), and every table
+in it is empty except the two lookup tables that `seed.sql` reproduces.
 
 Create the dev user (`devuser` / `devpass123`) and promote it to superuser —
 `/admin/*` returns 403 without this:
@@ -71,7 +71,7 @@ Give that user a stocked collection so `/store` is non-empty:
 
 ```bash
 psql -d mghsingles -v ON_ERROR_STOP=1 -c "
-UPDATE collection SET name='Main binder', binder=1, active=true
+UPDATE collection SET name='Main binder', active=true
  WHERE playerid=(SELECT id FROM player WHERE username='devuser');
 INSERT INTO card (scryfallid,conditionid,languageid,quantity,collectionid,variant,approved,price)
 SELECT v.sfid,v.cond,1,v.qty,c.id,v.variant,true,v.price
@@ -140,18 +140,26 @@ api up on http://localhost:3103 (pid 45342)
 
 login: POST /oauth -> 200 token=EF9VRfZmb5MbzJpMKe2XyZDMA superuser=true
 
-200   /store/1                 {"numberOfCards":3,"numberOfPages":1,...}
+200   /store/1                 {"numberOfCards":4,...,"available":6,"reserved":0,...}
 200   /store/search/bolt       {"numberOfCards":1,"numberOfPages":1,...}
 200   /card/modifiers          {"conditions":[{"id":1,"name":"NM"},...
 200   /card/sets               [{"cardsetname":"Core Set 2021",...
-200   /card/set/lea            {"cards":[{"scryfallid":"sf-lightning-bolt",...
+200   /card/set/lea            {"cards":[{"scryfallid":"0df55e3f-...","name":"Counterspell",...
 200   /player/me               {"username":"devuser",...,"superuser":true}
 200   /collection              [{"id":1,"playerid":1,"active":true,...
-200   /collection/1            {"id":1,"active":true,"percent":0.3,...
+200   /collection/1            {"id":1,"active":true,"percent":"0.3",...
 200   /collection/all          [{"id":1,"name":"Dev User"},{"id":3,...
-200   /sale                    {"active":true,"percent":0.3,...,"sales":[]}
+200   /sale                    {"active":true,...,"sales":[...]}
 200   /admin/me                {"username":"devuser",...}
-200   /admin/pendingpayments   []
+200   /admin/pendingpayments   [{"name":"Dev User","sales":"10020.00",...}]
+200   /storage                 [{"id":4,"name":"Binder de Fede","type":"binder",...
+200   /order                   []
+200   /wishlist                []
+200   /admin/order             [{"id":1,"status":"completed",...
+200   /admin/wishlist          [{"name":"Black Lotus","wanted":1,"inStock":0},...
+
+201   POST /card/1             {"message":"Su colección ha sido actualizada con éxito."}
+200   DELETE /card/19          {"scryfallid":"c4300d24-..."}
 
 0 route(s) never answered; 0 unhandled rejection(s) in server log
 ```
