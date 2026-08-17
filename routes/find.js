@@ -13,7 +13,11 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
-import { spreadForPage, pagesInSpread, POCKETS_PER_PAGE } from "./storage.js";
+import {
+  spreadForPage,
+  pagesInSpread,
+  POCKETS_PER_PAGE,
+} from "../services/storageContents.js";
 
 const NEIGHBOURS = 3; // cards shown either side of a hit in a sorted box
 
@@ -87,7 +91,7 @@ router.get(
           id: unit.id,
           name: unit.name,
           type: unit.type,
-          inshop: unit.inshop,
+          state: unit.state,
           owner: unit.player?.name ?? null,
         },
       };

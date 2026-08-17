@@ -3,7 +3,7 @@
 //
 //   node .claude/skills/run-mghsingles-api/smoke.mjs
 //   PORT=3101 node .claude/skills/run-mghsingles-api/smoke.mjs
-//   API_URL=http://localhost:3001 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
+//   API_URL=http://localhost:3101 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
 //
 // The server is launched with --unhandled-rejections=warn so that a handler
 // which somehow escapes its asyncHandler wrapper cannot kill the process
@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const APP_DIR = resolve(HERE, "../../..");
-const PORT = process.env.PORT || "3001";
+// 3101, not 3001: an unrelated project on this machine owns 3001, and pointing
+// the smoke run at it silently tests somebody else's server.
+const PORT = process.env.PORT || "3101";
 const BASE = process.env.API_URL || `http://localhost:${PORT}`;
 const LAUNCH = !process.argv.includes("--no-launch");
 const SEED_USER = process.argv.includes("--seed-user");
@@ -116,6 +118,7 @@ const PROBES = [
   ["/admin/me", true],
   ["/admin/pendingpayments", true],
   ["/storage", true],
+  ["/mystorage", true],
   ["/order", true],
   ["/wishlist", true],
   ["/admin/order", true],

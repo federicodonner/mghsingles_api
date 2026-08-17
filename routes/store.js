@@ -4,11 +4,8 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
-import {
-  releaseExpiredOrders,
-  reservedByCard,
-  availableOf,
-} from "../services/orders.js";
+import { releaseExpiredOrders } from "../services/orders.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
 
 const PAGE_SIZE = 50;
 const SEARCH_PAGE_SIZE = 200;
@@ -16,7 +13,7 @@ const SEARCH_PAGE_SIZE = 200;
 // Shape a card row the way both UIs read it: card fields at the top level,
 // with the cardgeneral join (name, image, set) flattened in alongside the
 // condition and language names.
-function flattenCard(card, reserved) {
+function flattenCard(card, reserved, offSale) {
   const { cardgeneral, cardcondition, cardlanguage, collection, ...rest } = card;
   // The CardKingdom quote for THIS printing and finish, so the shop can price
   // against a reference rather than from memory. Reference only — it never
@@ -32,7 +29,10 @@ function flattenCard(card, reserved) {
     // Stock is never decremented by a reservation, so the number a shopper can
     // actually buy is quantity minus whatever is being held for someone else.
     reserved: reserved.get(card.id) ?? 0,
-    available: availableOf(card, reserved),
+    // Copies sitting in a retired, released or returning container. They are
+    // physically unsellable even while the container is still in the shop.
+    offsale: offSale.get(card.id) ?? 0,
+    available: availableOf(card, reserved, offSale),
     ...(cardgeneral ? { ...cardgeneral, cardprice: undefined } : {}),
     cardname: cardgeneral?.name ?? null,
     condition: cardcondition?.name ?? null,
@@ -86,12 +86,12 @@ router.get(
       }),
     ]);
 
-    const reserved = await reservedByCard(prisma, cards.map((c) => c.id));
+    const { reserved, offSale } = await availabilityFor(prisma, cards);
 
     return res.status(200).json({
       numberOfCards,
       numberOfPages: Math.ceil(numberOfCards / PAGE_SIZE),
-      cards: cards.map((card) => flattenCard(card, reserved)),
+      cards: cards.map((card) => flattenCard(card, reserved, offSale)),
     });
   })
 );
@@ -129,12 +129,9 @@ router.get(
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
-    const reserved = await reservedByCard(
-      req.prisma,
-      cards.map((c) => c.id)
-    );
+    const { reserved, offSale } = await availabilityFor(req.prisma, cards);
     const flattened = cards
-      .map((card) => flattenCard(card, reserved))
+      .map((card) => flattenCard(card, reserved, offSale))
       .sort((a, b) => (a.cardname ?? "").localeCompare(b.cardname ?? ""));
 
     return res.status(200).json({

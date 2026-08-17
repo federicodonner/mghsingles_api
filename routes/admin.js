@@ -18,9 +18,9 @@ import {
   LOCATION_INCLUDE,
 } from "../services/locations.js";
 import { matches as matchesWishlist } from "./wishlist.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
 import {
   releaseExpiredOrders,
-  reservedByCard,
   refileOrder,
   refileInstructions,
   nowSeconds,
@@ -683,12 +683,10 @@ router.post(
 
     await releaseExpiredOrders(prisma);
 
-    // Is the card still actually free to give away?
-    const reserved = await reservedByCard(prisma, [match.cardid]);
-    const available = Math.max(
-      0,
-      (match.card?.quantity ?? 0) - (reserved.get(match.cardid) ?? 0)
-    );
+    // Is the card still actually free to give away? Both a reservation and a
+    // retired container take it out of reach.
+    const { reserved, offSale } = await availabilityFor(prisma, [match.card]);
+    const available = availableOf(match.card, reserved, offSale);
     if (available < 1) {
       return res.status(400).json({ message: messages.ORDER_NOT_ENOUGH_STOCK });
     }

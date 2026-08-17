@@ -12,12 +12,11 @@ import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import {
   releaseExpiredOrders,
-  reservedByCard,
-  availableOf,
   refileOrder,
   expiryFromNow,
   nowSeconds,
 } from "../services/orders.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
 
 const LINE_INCLUDE = {
   card: {
@@ -132,10 +131,10 @@ router.post(
       });
     }
 
-    const reserved = await reservedByCard(prisma, ids);
+    const { reserved, offSale } = await availabilityFor(prisma, cards);
     for (const line of lines) {
       const card = byId.get(Number(line.cardid));
-      const available = availableOf(card, reserved);
+      const available = availableOf(card, reserved, offSale);
       if (Number(line.quantity) > available) {
         return res.status(400).json({
           message: messages.ORDER_NOT_ENOUGH_STOCK,

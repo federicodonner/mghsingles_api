@@ -19,11 +19,8 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
-import {
-  releaseExpiredOrders,
-  reservedByCard,
-  availableOf,
-} from "../services/orders.js";
+import { releaseExpiredOrders } from "../services/orders.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
 
 // Normalise a constraint list from the request: unique, right type, and an
 // empty list always meaning "any".
@@ -101,10 +98,7 @@ async function attachAvailability(prisma, entries) {
     },
   });
 
-  const reserved = await reservedByCard(
-    prisma,
-    cards.map((c) => c.id)
-  );
+  const { reserved, offSale } = await availabilityFor(prisma, cards);
 
   const byName = new Map();
   for (const card of cards) {
@@ -139,7 +133,7 @@ async function attachAvailability(prisma, entries) {
     // count — otherwise a filtered entry looks identical to no stock at all.
     let excluded = 0;
     for (const card of candidates) {
-      const available = availableOf(card, reserved);
+      const available = availableOf(card, reserved, offSale);
       if (available <= 0) continue;
       if (matches(entry, card)) inStock.push(describeCard(card, available));
       else excluded++;

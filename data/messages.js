@@ -37,6 +37,20 @@ const messages = {
   STORAGE_DELETED: "El contenedor fue eliminado.",
   STORAGE_SHOP_OWNED:
     "Este contenedor es de la tienda, no puede entregarse a un cliente.",
+  STORAGE_NOT_YOURS: "Ese contenedor no es tuyo.",
+  STORAGE_BAD_STATE: "El contenedor no puede pasar a ese estado desde el actual.",
+  STORAGE_NOT_EDITABLE:
+    "Sólo podés reordenar un contenedor que ya te fue entregado.",
+  STORAGE_WITH_CUSTOMER:
+    "Ese contenedor está en manos de su dueño, la tienda no puede modificarlo.",
+  STORAGE_RETIRED:
+    "El contenedor fue retirado, sus cartas ya no están a la venta.",
+  STORAGE_RELEASED: "El contenedor fue entregado a su dueño.",
+  STORAGE_RETURNING: "Avisaste que traés el contenedor a la tienda.",
+  STORAGE_FOR_SALE: "El contenedor está en la tienda y sus cartas a la venta.",
+  CARD_NOT_YOURS: "Esa carta no es tuya.",
+  PLACEMENT_COMMITTED:
+    "Esa copia está apartada para un pedido, no se puede mover hasta entregarla.",
   COPY_ALREADY_PLACED: "Esa copia ya está guardada en un contenedor.",
   ALL_COPIES_PLACED: "Todas las copias de esta carta ya están guardadas.",
   PLACEMENT_NOT_FOUND: "La ubicación especificada no existe.",

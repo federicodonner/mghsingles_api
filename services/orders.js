@@ -51,24 +51,16 @@ export async function releaseExpiredOrders(prisma) {
   return count;
 }
 
-// How many copies of each card id are spoken for by open reservations.
-// Returns a Map of cardid -> reserved quantity.
-export async function reservedByCard(prisma, cardIds) {
-  const where = { order: { status: "pending" } };
-  if (cardIds) where.cardid = { in: cardIds };
+// Availability now lives in services/availability.js, because it depends on
+// storage state as well as reservations and the two must never be applied
+// separately. Re-exported so existing importers keep working.
+export {
+  reservedByCard,
+  offSaleByCard,
+  availabilityFor,
+  availableOf,
+} from "./availability.js";
 
-  const rows = await prisma.orderline.groupBy({
-    by: ["cardid"],
-    where,
-    _sum: { quantity: true },
-  });
-  return new Map(rows.map((r) => [r.cardid, r._sum.quantity ?? 0]));
-}
-
-// Available = stock minus whatever is being held for someone.
-export function availableOf(card, reserved) {
-  return Math.max(0, card.quantity - (reserved.get(card.id) ?? 0));
-}
 
 // Put a cancelled or expired order's cards back where they came from.
 //

@@ -20,11 +20,8 @@
 // entry is deleted, or the customer narrows their constraints past it.
 import { PrismaClient } from "@prisma/client";
 import { matches } from "../routes/wishlist.js";
-import {
-  releaseExpiredOrders,
-  reservedByCard,
-  availableOf,
-} from "../services/orders.js";
+import { releaseExpiredOrders } from "../services/orders.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
 
 const prisma = new PrismaClient();
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -60,10 +57,7 @@ async function main() {
     },
   });
 
-  const reserved = await reservedByCard(
-    prisma,
-    cards.map((c) => c.id)
-  );
+  const { reserved, offSale } = await availabilityFor(prisma, cards);
 
   const byName = new Map();
   for (const card of cards) {
@@ -76,7 +70,7 @@ async function main() {
   const wanted = new Map();
   for (const entry of entries) {
     for (const card of byName.get(entry.name.toLowerCase()) ?? []) {
-      if (availableOf(card, reserved) <= 0) continue;
+      if (availableOf(card, reserved, offSale) <= 0) continue;
       if (!matches(entry, card)) continue;
       wanted.set(`${entry.id}:${card.id}`, {
         wishlistid: entry.id,

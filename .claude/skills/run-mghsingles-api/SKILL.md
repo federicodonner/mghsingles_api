@@ -6,7 +6,7 @@ description: Build, run, seed and smoke-test the mghsingles Express/Prisma API. 
 # Run the mghsingles API
 
 Express 4 + Prisma 6 + PostgreSQL. Single entrypoint `app.js`, listens on
-`PORT` (default **3001**). No test suite (`npm test` exits 1 by design).
+`PORT` (default **3101**). No test suite (`npm test` exits 1 by design).
 
 The agent path is `.claude/skills/run-mghsingles-api/smoke.mjs`: it launches
 the server, logs in, probes every route and prints which ones answer, then
@@ -268,10 +268,10 @@ node .claude/skills/run-mghsingles-api/smoke.mjs
 Against a server you already started:
 
 ```bash
-API_URL=http://localhost:3001 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
+API_URL=http://localhost:3101 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
 ```
 
-On a different port (use this when 3001 is taken):
+On a different port (use this when 3101 is taken):
 
 ```bash
 PORT=3101 node .claude/skills/run-mghsingles-api/smoke.mjs
@@ -478,8 +478,7 @@ unset and every query fails at runtime. Don't use it.
 
 - **Storage lives in `storage` + `cardplacement`, not on `collection`.** A
   `storage` row is a binder, sorted box or unsorted box; `playerid` null means
-  the shop owns it, and a customer's container can be taken home with
-  `inshop: false`. `cardplacement` pins one *copy* of a card row to a spot —
+  the shop owns it. `cardplacement` pins one *copy* of a card row to a spot —
   `copyindex` is 1-based and a row with `quantity: 8` has copies 1..8, which
   can sit in different containers. Binders use page/pocket/depth, sorted boxes
   use sequence, unsorted boxes use none of them. The old `cardposition` table
@@ -487,8 +486,57 @@ unset and every query fails at runtime. Don't use it.
 
 - **Binder spreads put page 1 alone.** Spread 0 is `[null, 1]`, spread 1 is
   `[2, 3]`, spread 2 is `[4, 5]` — page 1 has nothing facing it, like opening a
-  real binder. `spreadForPage()` and `pagesInSpread()` in `routes/storage.js`
-  are the only place that arithmetic lives; import them rather than repeating it.
+  real binder. `spreadForPage()` and `pagesInSpread()` in
+  `services/storageContents.js` are the only place that arithmetic lives; import
+  them rather than repeating it.
+
+- **A container has four states, and only `for_sale` sells.** `storage.state` is
+  `for_sale` / `retired` / `released` / `returning`, replacing an `inshop`
+  boolean that was purely decorative — a card in a container marked "taken home"
+  still showed `available = quantity`. The transitions and who may make them are
+  in `services/storageState.js`:
+
+  | from | to | who | means |
+  |---|---|---|---|
+  | `for_sale` | `retired` | customer | "I want my binder back" |
+  | `retired` | `released` | shop | handed the physical container over |
+  | `retired` | `for_sale` | shop | customer changed their mind |
+  | `released` | `returning` | customer | "I am bringing it in" |
+  | `returning` | `for_sale` | shop | took delivery; cards go back on sale |
+
+  Each step has exactly one actor: the customer says what they want, the shop
+  confirms what physically happened. Retiring takes the cards off sale
+  **immediately**, before the container moves — the customer has asked for it
+  back, so it should stop selling that instant. A shop-owned container
+  (`playerid` null) never leaves `for_sale`; there is nobody to hand it to.
+
+- **Availability has two subtracted terms, and `services/availability.js` is the
+  only place that knows both.** `available = quantity - reserved - offSale`,
+  where `reserved` counts copies in a pick-up bag and `offSale` counts copies in
+  a container whose state is not `for_sale`. `offSaleByCard` filters
+  `orderlineid: null` deliberately: a bagged copy is already counted by
+  `reserved`, and counting it twice would hide stock. Every caller
+  (`/store`, `/order`, `/wishlist`, `/admin`, `scripts/matchWishlists.mjs`) goes
+  through `availabilityFor` + `availableOf` rather than assembling the terms
+  itself, because the old per-route versions each remembered a different subset.
+
+- **Releasing a container does NOT take committed copies with it.** A copy in
+  somebody's pick-up bag is promised to a buyer and physically in a bag on the
+  counter. Its `cardplacement` row survives release — that address is the only
+  record of where it came from — and the container's `state` is what tells a
+  later refile that the binder has left the building. `POST /storage/:id/state`
+  returns those copies as `heldback` so whoever hands the binder over knows to
+  keep them. Contents views and container counts filter `orderlineid: null`, so
+  the released binder shows and counts only what is actually in it.
+
+- **`/mystorage` is the customer's half, `/storage` is the shop's.** Both do the
+  same reads and rearrangements — `services/storageContents.js` holds the
+  mechanics so a second copy of the depth allocator cannot drift — and differ
+  only in guards. `/mystorage` scopes every query by `playerid` and allows edits
+  only while `released`; `/storage` refuses to touch a `released` container at
+  all, since it is in the customer's living room. Both responses carry `cando`,
+  the list of transitions that actor may make from here, so neither UI
+  reimplements the state machine to decide which buttons to draw.
 
 - **`sale.price` is per unit.** Line totals are `price * quantity`. The SQL
   that `/admin/pendingpayments` replaced summed `price` alone and under-reported
@@ -566,7 +614,7 @@ unset and every query fails at runtime. Don't use it.
 | Symptom | Fix |
 |---|---|
 | `P1012 ... datasource property url is no longer supported` | `npx prisma@6.14.0`, not `npx prisma` |
-| `Error: listen EADDRINUSE :::3001` | Something else owns 3001. `lsof -nP -iTCP:3001 -sTCP:LISTEN`, then use `PORT=3101` |
+| `Error: listen EADDRINUSE :::3101` | Something else owns 3101. `lsof -nP -iTCP:3101 -sTCP:LISTEN`, then use another free port. **Never free 3000/3001** — an unrelated project owns them. |
 | `PrismaClientInitializationError` / `env(DATABASE_URL)` empty | Started with `npm start`; use `-r dotenv/config` |
 | `Cannot GET /store/1` on a port you expected | A *different* Express app is on that port — check with `lsof` |
 | Request hangs, server log shows `UnhandledPromiseRejection` | An async handler is missing its `asyncHandler` wrapper |

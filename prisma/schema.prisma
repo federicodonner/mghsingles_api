@@ -190,7 +190,19 @@ model storage {
   name          String
   type          storagetype
   playerid      Int?
-  inshop        Boolean         @default(true)
+  /// Where this container is in its lifecycle. Replaces the old `inshop`
+  /// boolean, which could not distinguish "the customer asked for it back" from
+  /// "the customer physically has it".
+  ///
+  ///   for_sale  — in the shop; its cards are on sale
+  ///   retired   — the customer asked for it back. Cards come OFF sale at once,
+  ///               though the container is still physically in the shop.
+  ///   released  — handed back; the customer has it and may edit it
+  ///   returning — the customer is bringing it in; the shop has not taken it yet
+  ///
+  /// Only `for_sale` puts cards on sale. A shop-owned container is always
+  /// for_sale: there is nobody to hand it to.
+  state         storagestate    @default(for_sale)
   player        player?         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "storage_player")
   cardplacement cardplacement[]
 
@@ -435,4 +447,11 @@ enum playerrole {
   customer
   staff
   owner
+}
+
+enum storagestate {
+  for_sale
+  retired
+  released
+  returning
 }

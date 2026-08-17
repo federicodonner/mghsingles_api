@@ -2,7 +2,10 @@ import express, { urlencoded } from "express";
 import cors from "cors";
 import pkg from "body-parser";
 const { json } = pkg;
-const PORT = process.env.PORT || 3001;
+// Heroku injects PORT, so the fallback only ever applies locally. 3001 used to
+// be the fallback and collided with an unrelated project on this machine, which
+// made the API fail to boot with EADDRINUSE rather than anything informative.
+const PORT = process.env.PORT || 3101;
 import { PrismaClient } from "@prisma/client";
 
 import messages from "./data/messages.js";
@@ -36,6 +39,7 @@ app.use("/player/me", authentication);
 app.use("/order", authentication);
 app.use("/wishlist", authentication);
 app.use("/notification", authentication);
+app.use("/mystorage", authentication);
 app.put("/player", authentication);
 app.put("/player/password", authentication);
 // NOTE: /card is deliberately NOT listed here. Registering auth by path from
@@ -94,7 +98,11 @@ app.use("/notification", notificationRoute);
 
 // Routes for physical storage (binders and boxes)
 import storageRoute from "./routes/storage.js";
+import mystorageRoute from "./routes/mystorage.js";
 app.use("/storage", storageRoute);
+
+// A customer's own binders and boxes: their half of the retire/release cycle.
+app.use("/mystorage", mystorageRoute);
 
 // Routes for locating a card in the shop
 import findRoute from "./routes/find.js";
