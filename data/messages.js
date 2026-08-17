@@ -60,6 +60,10 @@ const messages = {
   MATCH_DISMISSED: "La coincidencia fue descartada.",
   NOTIFICATION_NOT_FOUND: "Ese aviso no existe.",
   NOTIFICATION_REMOVED: "El aviso fue eliminado.",
+  MULTIPLIERS_SAVED: "Los multiplicadores fueron guardados.",
+  MULTIPLIER_RANGE:
+    "Los multiplicadores deben estar entre 0 y 1 — un valor mayor pondría una carta jugada por encima de una NM.",
+  PRICE_SAVED: "El precio fue guardado.",
   PAYMENT_REGISTERED: "El pago fue registrado correctamente.",
 };
 

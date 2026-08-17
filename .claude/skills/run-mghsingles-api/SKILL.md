@@ -187,8 +187,23 @@ Prices land in `cardprice`, one row per printing per finish per source:
 - `buylist` — what it pays; the reference for taking cards in
 
 A row can have a buylist and no retail, meaning CK will buy the card but has
-none in stock. Nothing writes `card.price` — the shop's asking price stays the
-shop's decision, and the reference is shown beside it in the sell screen.
+none in stock.
+
+**The import then reprices stock** (`services/pricing.js`), under three rules:
+
+1. **CardKingdom quotes the NM price.** Every other grade is that times the
+   condition's multiplier, held on `cardcondition.sellmultiplier` /
+   `buymultiplier` and edited from the admin *Precios* page. Saving there
+   reprices immediately rather than waiting for the nightly run.
+2. **A locked price is never touched.** `card.pricelocked` and
+   `buypricelocked` are what the shop sets to hold a card off-market.
+3. **A missing reference never clears a price.** CardKingdom drops cards it has
+   no stock of, and a price silently falling to null would read as free.
+
+Sell and buy are fully independent — separate columns, separate locks, separate
+multipliers — because CardKingdom frequently has a buylist and no retail for the
+same card. Unlocking a price re-applies the reference at once, so the card
+rejoins the market rather than keeping a stale manual number until midnight.
 
 Freshness for all three jobs:
 

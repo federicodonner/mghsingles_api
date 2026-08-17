@@ -20,6 +20,7 @@
 import { createGunzip } from "node:zlib";
 import { Readable } from "node:stream";
 import readline from "node:readline";
+import { applyReferencePrices } from "./pricing.js";
 
 const HEADERS = { "User-Agent": "mghsingles/1.0 (price sync)" };
 
@@ -254,12 +255,17 @@ export async function syncPrices(prisma, { log = () => {}, force = false } = {})
   }
   await flush();
 
+  // References are only half the job: the shop's own prices are derived from
+  // them, honouring locks and never clearing a price the source has dropped.
+  const applied = await applyReferencePrices(prisma, { log });
+
   const secs = nowSeconds() - started;
   log(
     `prices: ${written} price row(s) written, ${skippedUnknown} card(s) we do not stock, in ${secs}s`
   );
 
   return {
+    applied,
     started,
     finished: nowSeconds(),
     written,

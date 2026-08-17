@@ -19,8 +19,20 @@ model card {
   /// "" and "normal" for the same thing.
   variant       String         @default("nonfoil")
   approved      Boolean        @default(true)
-  price         Float?
+  /// What the shop SELLS this copy for. Written by the price import from the
+  /// CardKingdom retail reference times the condition's sell multiplier, unless
+  /// `pricelocked` is set.
+  price         Decimal?       @db.Decimal(10, 2)
+  /// What the shop PAYS for one — derived from CardKingdom's buylist. Tracked
+  /// separately from `price` because they move independently and the shop edits
+  /// them independently.
+  buyprice      Decimal?       @db.Decimal(10, 2)
+  /// Set when a human fixed the price by hand. The import then leaves it alone,
+  /// which is the whole point: a card can be priced off-market deliberately.
+  pricelocked    Boolean       @default(false)
+  buypricelocked Boolean       @default(false)
   priceupdate   Int?
+  buypriceupdate Int?
   ckuri         String?
   collection    collection     @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_collection")
   cardcondition cardcondition  @relation(fields: [conditionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "card_condition")
@@ -34,6 +46,15 @@ model card {
 model cardcondition {
   id   Int    @id @default(autoincrement())
   name String
+  /// Fraction of the NM reference this condition is worth.
+  ///
+  /// CardKingdom quotes ONE price per printing, which is the NM price, so every
+  /// other grade is derived from it. Sell and buy are separate multipliers
+  /// because a shop need not discount what it pays at the same rate it
+  /// discounts what it charges — set them equal if you want them to move
+  /// together. Editable from the admin config page.
+  sellmultiplier Decimal @default(1) @db.Decimal(5, 4)
+  buymultiplier  Decimal @default(1) @db.Decimal(5, 4)
   card card[]
   sale sale[]
 }

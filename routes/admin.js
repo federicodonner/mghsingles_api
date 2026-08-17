@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import recordSale, { recordWithdrawal } from "../services/sales.js";
+import { applyReferencePrices } from "../services/pricing.js";
 import {
   describeLocation,
   sortLocations,
@@ -851,6 +852,143 @@ router.get(
         printingsTotal: totalPrintings,
       },
     });
+  })
+);
+
+// --------------------------------------------------------------------------
+// Pricing policy
+// --------------------------------------------------------------------------
+
+// The condition multipliers. CardKingdom quotes the NM price, so these are what
+// turn it into a price for every other grade.
+router.get(
+  "/condition",
+  asyncHandler(async (req, res) => {
+    const conditions = await req.prisma.cardcondition.findMany({
+      orderBy: { id: "asc" },
+    });
+    return res.status(200).json(conditions);
+  })
+);
+
+// Update the multipliers, then reprice everything they affect.
+//
+// Body: { conditions: [{ id, sellmultiplier, buymultiplier }] }
+router.put(
+  "/condition",
+  asyncHandler(async (req, res) => {
+    const rows = req.body.conditions;
+    if (!Array.isArray(rows) || !rows.length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    // A multiplier above 1 would price a played card above near-mint, which is
+    // always a slip rather than an intention.
+    const valid = rows.every(
+      (row) =>
+        Number.isInteger(Number(row.id)) &&
+        Number(row.sellmultiplier) >= 0 &&
+        Number(row.sellmultiplier) <= 1 &&
+        Number(row.buymultiplier) >= 0 &&
+        Number(row.buymultiplier) <= 1
+    );
+    if (!valid) {
+      return res.status(400).json({ message: messages.MULTIPLIER_RANGE });
+    }
+
+    const prisma = req.prisma;
+    await prisma.$transaction(
+      rows.map((row) =>
+        prisma.cardcondition.update({
+          where: { id: Number(row.id) },
+          data: {
+            sellmultiplier: Number(row.sellmultiplier),
+            buymultiplier: Number(row.buymultiplier),
+          },
+        })
+      )
+    );
+
+    // Changing policy is pointless if stock keeps yesterday's numbers, so this
+    // reprices immediately rather than waiting for the nightly import.
+    const applied = await applyReferencePrices(prisma);
+
+    return res.status(200).json({ message: messages.MULTIPLIERS_SAVED, applied });
+  })
+);
+
+// Set one card's prices by hand, and decide whether the import may move them.
+//
+// Body: { price, buyprice, pricelocked, buypricelocked }
+// Each field is optional; omitting one leaves it untouched.
+router.put(
+  "/card/:cardId/price",
+  [check("cardId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.cardId, 10);
+
+    const card = await prisma.card.findUnique({ where: { id } });
+    if (!card) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+
+    const now = nowSeconds();
+    const data = {};
+
+    // A price may be cleared deliberately by sending null, which is different
+    // from omitting the field.
+    if (req.body.price !== undefined) {
+      if (req.body.price !== null && !(Number(req.body.price) >= 0)) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      data.price = req.body.price === null ? null : Number(req.body.price);
+      data.priceupdate = now;
+    }
+    if (req.body.buyprice !== undefined) {
+      if (req.body.buyprice !== null && !(Number(req.body.buyprice) >= 0)) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      data.buyprice = req.body.buyprice === null ? null : Number(req.body.buyprice);
+      data.buypriceupdate = now;
+    }
+    if (typeof req.body.pricelocked === "boolean") {
+      data.pricelocked = req.body.pricelocked;
+    }
+    if (typeof req.body.buypricelocked === "boolean") {
+      data.buypricelocked = req.body.buypricelocked;
+    }
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    const updated = await prisma.card.update({ where: { id }, data });
+
+    // Unlocking is a request to rejoin the market, so put the reference price
+    // back straight away rather than leaving a stale manual number until the
+    // nightly run.
+    const unlocked =
+      (req.body.pricelocked === false && req.body.price === undefined) ||
+      (req.body.buypricelocked === false && req.body.buyprice === undefined);
+    if (unlocked) {
+      await applyReferencePrices(prisma, { onlyCardIds: [id] });
+    }
+
+    const fresh = await prisma.card.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        price: true,
+        buyprice: true,
+        pricelocked: true,
+        buypricelocked: true,
+      },
+    });
+    void updated;
+    return res.status(200).json(fresh);
   })
 );
 
