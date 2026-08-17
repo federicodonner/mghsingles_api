@@ -165,9 +165,13 @@ async function getSingleCardPrice(card) {
       priceToReturn = 1;
     }
 
-    // Store the price in the database
-    const sql = `UPDATE card SET price = '${priceToReturn}', ckuri = '${path}' WHERE id = ${card.id}`;
-    const updateResult = await client.query(sql);
+    // Store the price in the database. Parameterised: `path` is scraped out of
+    // CardKingdom's HTML, so it is third-party text and must never be
+    // concatenated into a statement.
+    const updateResult = await client.query(
+      "UPDATE card SET price = $1, ckuri = $2 WHERE id = $3",
+      [priceToReturn, path, card.id]
+    );
     if (updateResult.err) {
       throw updateResult.err;
     }
@@ -430,13 +434,23 @@ router.post(
   })
 );
 
+// Everything the CardKingdom price scrape needs about one stock row.
+// Parameterised — `cardid` arrives from a URL param and a request body, both of
+// which used to be interpolated straight into the statement.
+const CARD_FOR_PRICE_SQL =
+  "SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* " +
+  "FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid " +
+  "WHERE c.id = $1";
+
 // --------------------------------
 // --------------------------------
 // Returns the price of a single card scrapped from CK
 router.post("/price/:cardid", authentication, asyncHandler(async (req, res) => {
-  const cardid = req.params.cardid;
-  let sql = `SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid WHERE c.id = '${cardid}'`;
-  const cards = await client.query(sql);
+  const cardid = parseInt(req.params.cardid, 10);
+  if (!(cardid > 0)) {
+    return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+  }
+  const cards = await client.query(CARD_FOR_PRICE_SQL, [cardid]);
   if (cards.err) {
     throw cards.err;
   }
@@ -475,8 +489,9 @@ router.post("/multipleprice", authentication, asyncHandler(async (req, res) => {
   new Promise((resolveList) => {
     // For each card, try to find the price in the database first
     cards.forEach(async (card, index) => {
-      let sql = `SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid WHERE c.id = '${card.id}'`;
-      const responseCards = await client.query(sql);
+      const responseCards = await client.query(CARD_FOR_PRICE_SQL, [
+        parseInt(card.id, 10),
+      ]);
       if (responseCards.err) {
         throw responseCards.err;
       }

@@ -10,7 +10,7 @@
 // mid-run and make every later probe report a connection error instead of the
 // real problem. A route that throws without responding shows up as HANG.
 //
-// --seed-user creates devuser/devpass123 (+ its collection and three cards) if
+// --seed-user creates the login (+ its collection and three cards) if
 // missing, so the authenticated probes have something to authenticate as.
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -25,8 +25,9 @@ const PORT = process.env.PORT || "3101";
 const BASE = process.env.API_URL || `http://localhost:${PORT}`;
 const LAUNCH = !process.argv.includes("--no-launch");
 const SEED_USER = process.argv.includes("--seed-user");
-const USER = process.env.DEV_USER || "devuser";
-const PASS = process.env.DEV_PASS || "devpass123";
+// The owner account from `npm run seed:dev`. Override with DEV_USER/DEV_PASS.
+const USER = process.env.DEV_USER || "fede";
+const PASS = process.env.DEV_PASS || "fede1234";
 const TIMEOUT = 8000;
 
 let child = null;
@@ -104,6 +105,17 @@ let token = null;
 console.log("");
 
 // --- probe ----------------------------------------------------------------
+// The caller's own collection id. Hardcoding 1 broke every time the database
+// was reseeded, and reported a route as failing when only the fixture moved.
+let myCollectionId = null;
+if (token) {
+  const r = await jfetch("/collection", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await r.json().catch(() => []);
+  myCollectionId = Array.isArray(body) && body.length ? body[0].id : null;
+}
+
 const PROBES = [
   ["/store/1", false],
   ["/store/search/bolt", false],
@@ -112,7 +124,7 @@ const PROBES = [
   ["/card/set/lea", false],
   ["/player/me", true],
   ["/collection", true],
-  ["/collection/1", true],
+  [`/collection/${myCollectionId ?? 1}`, true],
   ["/collection/all", true],
   ["/sale", true],
   ["/admin/me", true],

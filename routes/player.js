@@ -108,28 +108,22 @@ router.put(
     if (!name && !email) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
-    let sql = "UPDATE player SET ";
 
-    if (name) {
-      sql = sql + "name='" + name + "'";
-    }
+    // This used to build the UPDATE by string concatenation against a `client`
+    // that is never imported, so the route threw ReferenceError on every call.
+    // Had it worked it would have been an injection: `check().escape()` escapes
+    // HTML entities, not SQL quotes.
+    const data = {};
+    if (name) data.name = name;
+    if (email) data.email = email.toLowerCase();
 
-    if (name && email) {
-      sql = sql + ", ";
-    }
+    const updated = await req.prisma.player.update({
+      where: { id: playerId },
+      data,
+      select: { id: true, username: true, name: true, email: true },
+    });
 
-    if (email) {
-      sql = sql + "email='" + email + "'";
-    }
-
-    sql = sql + " WHERE id = " + playerId;
-    sql = sql + " RETURNING username, name, email, id";
-    let result = await client.query(sql);
-    if (result.err) {
-      throw result.err;
-    }
-
-    return res.status(200).json(result.rows[0]);
+    return res.status(200).json(updated);
   })
 );
 
@@ -147,27 +141,23 @@ router.put("/password", asyncHandler(async (req, res) => {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
 
-  // Verify that the old password is correct
-  let sql = "SELECT * FROM player WHERE id = " + playerId;
-  let players = await client.query(sql);
-  if (players.err) {
-    throw players.err;
+  // Same story as PUT / above: raw SQL against a `client` that does not exist,
+  // plus an assignment to an undeclared `hashedPassword`, which throws outright
+  // in a module. Nobody could change their password.
+  const player = await req.prisma.player.findUnique({ where: { id: playerId } });
+  if (!player) {
+    return res.status(404).json({ message: messages.USER_NOT_FOUND });
   }
-  // Verifies that the password is correct
-  hashedPassword = players.rows[0].passwordhash;
-  let passwordResult = await compare(password, hashedPassword);
-  if (!passwordResult) {
+
+  if (!(await compare(password, player.passwordhash))) {
     return res.status(400).json({ message: messages.INCORRECT_PASSWORD });
   }
 
-  // If the password is correct, create the hash and store it
-  // Hash the password
-  let hash = await _hash(newPassword, 8);
-  sql = "UPDATE player SET passwordHash='" + hash + "' WHERE id = " + playerId;
-  let result = await client.query(sql);
-  if (result.err) {
-    throw result.err;
-  }
+  await req.prisma.player.update({
+    where: { id: playerId },
+    data: { passwordhash: await _hash(newPassword, 8) },
+  });
+
   return res.status(200).json({ message: messages.USER_UPDATED });
 }));
 
@@ -175,7 +165,6 @@ router.put("/password", asyncHandler(async (req, res) => {
 router.get("/me", asyncHandler(async (req, res) => {
   // Gets the userId from the authentication middleware
   var playerId = req.playerId;
-  console.log(playerId);
 
   // Gets prisma from middleware
   const prisma = req.prisma;
