@@ -11,7 +11,7 @@ import { isFoil } from "./finishes.js";
 // `card` must have been loaded with its `collection`, since the commission rate
 // lives there and is captured onto the sale — repricing a collection later must
 // not rewrite what past sales owed.
-export async function recordSale(tx, { card, quantity, price, date }) {
+export async function recordSale(tx, { card, quantity, price, date, placementIds }) {
   await tx.sale.create({
     data: {
       collectionid: card.collectionid,
@@ -42,9 +42,23 @@ export async function recordSale(tx, { card, quantity, price, date }) {
     data: { quantity: remaining },
   });
 
-  // Copies are numbered 1..quantity, so shrinking the row leaves any placement
-  // above the new count pointing at a copy that no longer exists. Drop those,
-  // otherwise a binder keeps showing cards that were sold off the top.
+  await dropPlacementsFor(tx, card, remaining, placementIds);
+}
+
+// Remove the placements of the copies that physically left.
+//
+// When the sale came from a pick-up bag we know exactly which copies those
+// were, because the bag holds their placements. Deleting by "copyindex above
+// the new count" instead would be wrong whenever the copy taken was not the
+// highest-numbered one — selling copy 2 of 4 would leave copy 2's pocket
+// occupied and wrongly empty copy 4's.
+//
+// A counter sale has no such record, so fall back to trimming the top.
+async function dropPlacementsFor(tx, card, remaining, placementIds) {
+  if (placementIds?.length) {
+    await tx.cardplacement.deleteMany({ where: { id: { in: placementIds } } });
+    return;
+  }
   await tx.cardplacement.deleteMany({
     where: { cardid: card.id, copyindex: { gt: remaining } },
   });
@@ -57,7 +71,7 @@ export default recordSale;
 // Used when a customer collects a card from their own consigned collection:
 // the card leaves the shop, but there is no buyer, no money and nobody to pay
 // out. Writing a sale here would credit the owner for buying their own card.
-export async function recordWithdrawal(tx, { card, quantity }) {
+export async function recordWithdrawal(tx, { card, quantity, placementIds }) {
   if (quantity >= card.quantity) {
     await tx.cardplacement.deleteMany({ where: { cardid: card.id } });
     await tx.card.delete({ where: { id: card.id } });
@@ -68,9 +82,5 @@ export async function recordWithdrawal(tx, { card, quantity }) {
     where: { id: card.id },
     data: { quantity: remaining },
   });
-  // Same reasoning as recordSale: placements above the new count point at
-  // copies that no longer exist.
-  await tx.cardplacement.deleteMany({
-    where: { cardid: card.id, copyindex: { gt: remaining } },
-  });
+  await dropPlacementsFor(tx, card, remaining, placementIds);
 }

@@ -59,6 +59,10 @@ router.get(
 
     const placements = await prisma.cardplacement.findMany({
       where: {
+        // A copy in a pick-up bag keeps its address so it can be refiled, but
+        // it is not there now — sending someone to that pocket would waste
+        // their time.
+        orderlineid: null,
         card: {
           cardgeneral: { name: { contains: cardName, mode: "insensitive" } },
         },
@@ -92,7 +96,7 @@ router.get(
         hit.spread = spreadForPage(pl.page);
         // Ship the whole page so the UI can draw it with the hit highlighted.
         const onPage = await prisma.cardplacement.findMany({
-          where: { storageid: unit.id, page: pl.page },
+          where: { storageid: unit.id, page: pl.page, orderlineid: null },
           include: { card: { include: CARD_INCLUDE } },
           orderBy: [{ pocket: "asc" }, { depth: "asc" }],
         });
@@ -114,7 +118,7 @@ router.get(
         };
       } else if (unit.type === "sorted_box") {
         const total = await prisma.cardplacement.count({
-          where: { storageid: unit.id },
+          where: { storageid: unit.id, orderlineid: null },
         });
         hit.positionInBox = pl.sequence;
         hit.boxSize = total;
@@ -122,6 +126,7 @@ router.get(
         const around = await prisma.cardplacement.findMany({
           where: {
             storageid: unit.id,
+            orderlineid: null,
             sequence: {
               gte: Math.max(1, pl.sequence - NEIGHBOURS),
               lte: pl.sequence + NEIGHBOURS,

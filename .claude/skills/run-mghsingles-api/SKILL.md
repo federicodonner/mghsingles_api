@@ -326,9 +326,22 @@ unset and every query fails at runtime. Don't use it.
   matched card aside appends a line to it rather than inventing a parallel
   concept — "awaiting pickup and payment" is exactly what a pending order
   already means. Reserving is what removes the card from everyone else's
-  availability; stock only drops when the order completes. The card's
-  `cardplacement` rows are cleared at set-aside, because it has physically left
-  its binder or box for the bag.
+  availability; stock only drops when the order completes.
+
+- **A bagged copy KEEPS its `cardplacement`,** linked to the order line via
+  `orderlineid`. The placement is the only record of where the copy belongs,
+  and a cancelled order has to be refiled — deleting it would throw that away.
+  Everything that shows container contents (`/storage/:id`, `/find`) filters on
+  `orderlineid: null`, so the card correctly stops appearing in the pocket it
+  has left. Cancelling or expiring clears the link and the card is back;
+  completing deletes it, because the card has left the shop.
+
+- **A sale must remove the placement of the copy that actually left.**
+  `recordSale`/`recordWithdrawal` take `placementIds` when the sale came from a
+  bag. Falling back to "delete every placement whose copyindex exceeds the new
+  quantity" is only right when the copy taken was the highest-numbered one —
+  selling copy 2 of 4 would otherwise leave copy 2's pocket occupied and wrongly
+  empty copy 4's. Counter sales have no such record and still use the fallback.
 
 - **`orderline.kind` decides whether money moves.** A `withdrawal` line is a
   customer collecting a card out of their own consigned collection: priced at

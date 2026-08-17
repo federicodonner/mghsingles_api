@@ -6,10 +6,17 @@ import { Prisma } from "@prisma/client";
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import recordSale, { recordWithdrawal } from "../services/sales.js";
+import {
+  describeLocation,
+  sortLocations,
+  LOCATION_INCLUDE,
+} from "../services/locations.js";
 import { matches as matchesWishlist } from "./wishlist.js";
 import {
   releaseExpiredOrders,
   reservedByCard,
+  refileOrder,
+  refileInstructions,
   nowSeconds,
   expiryFromNow,
 } from "../services/orders.js";
@@ -333,6 +340,9 @@ router.post(
                 collection: { select: { percent: true } },
               },
             },
+            // Which physical copies are in the bag, so the right ones are the
+            // ones removed.
+            cardplacement: { select: { id: true } },
           },
         },
       },
@@ -363,6 +373,7 @@ router.post(
     const today = nowSeconds();
     await prisma.$transaction(async (tx) => {
       for (const line of order.orderline) {
+        const placementIds = line.cardplacement.map((pl) => pl.id);
         if (line.kind === "withdrawal") {
           // The customer's own consigned card going home. No sale row, because
           // there is no buyer and nobody to pay out — writing one would credit
@@ -370,6 +381,7 @@ router.post(
           await recordWithdrawal(tx, {
             card: line.card,
             quantity: line.quantity,
+            placementIds,
           });
         } else {
           await recordSale(tx, {
@@ -377,6 +389,7 @@ router.post(
             quantity: line.quantity,
             price: Number(line.price),
             date: today,
+            placementIds,
           });
         }
       }
@@ -419,11 +432,36 @@ router.post(
       return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
     }
 
-    await prisma.order.update({
-      where: { id },
-      data: { status: "cancelled", closed: nowSeconds() },
+    // Read the addresses before clearing them — this is the list of where each
+    // card has to go back.
+    const refile = await refileInstructions(prisma, id);
+
+    await prisma.$transaction(async (tx) => {
+      await refileOrder(tx, id);
+      await tx.order.update({
+        where: { id },
+        data: { status: "cancelled", closed: nowSeconds() },
+      });
     });
-    return res.status(200).json({ message: messages.ORDER_CANCELLED });
+
+    return res.status(200).json({ message: messages.ORDER_CANCELLED, refile });
+  })
+);
+
+// Where the cards in an order belong, so a bag can be emptied back onto the
+// shelves. Readable before cancelling, so the shop can see what it is in for.
+router.get(
+  "/order/:orderId/refile",
+  [check("orderId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    return res
+      .status(200)
+      .json(await refileInstructions(prisma, parseInt(req.params.orderId, 10)));
   })
 );
 
@@ -559,6 +597,8 @@ router.get(
             cardcondition: { select: { name: true } },
             cardlanguage: { select: { name: true } },
             collection: { select: { id: true, playerid: true } },
+            // Where to actually go and get it.
+            cardplacement: { include: LOCATION_INCLUDE },
           },
         },
       },
@@ -592,6 +632,12 @@ router.get(
         language: match.card?.cardlanguage?.name ?? null,
         price: match.card?.price ?? null,
         available: match.card?.quantity ?? 0,
+        // Every copy's whereabouts, nearest-to-hand first. A copy already in
+        // someone else's bag is flagged rather than hidden, so the shop is not
+        // sent looking for it in a pocket it has left.
+        locations: sortLocations(
+          (match.card?.cardplacement ?? []).map(describeLocation)
+        ),
       });
     }
 
@@ -664,13 +710,15 @@ router.post(
       const line = await tx.orderline.findFirst({
         where: { orderid: bag.id, cardid: match.cardid },
       });
+      let lineId;
       if (line) {
         await tx.orderline.update({
           where: { id: line.id },
           data: { quantity: line.quantity + 1 },
         });
+        lineId = line.id;
       } else {
-        await tx.orderline.create({
+        const created = await tx.orderline.create({
           data: {
             orderid: bag.id,
             cardid: match.cardid,
@@ -679,11 +727,35 @@ router.post(
             kind: match.kind,
           },
         });
+        lineId = created.id;
       }
 
-      // The card is physically moving into the bag, so it is no longer in
-      // whichever binder or box it was filed in.
-      await tx.cardplacement.deleteMany({ where: { cardid: match.cardid } });
+      // The card physically moves into the bag, but its placement is KEPT and
+      // attached to the line instead of being deleted: it is the only record
+      // of where the copy belongs, and a cancelled order has to be refiled.
+      // Views of container contents exclude bagged placements, so the card
+      // still stops showing as being in the pocket.
+      //
+      // The caller may name the copy they actually took; otherwise take the
+      // first not already in a bag.
+      const wanted = req.body.placementid
+        ? await tx.cardplacement.findFirst({
+            where: {
+              id: parseInt(req.body.placementid, 10),
+              cardid: match.cardid,
+              orderlineid: null,
+            },
+          })
+        : await tx.cardplacement.findFirst({
+            where: { cardid: match.cardid, orderlineid: null },
+            orderBy: [{ page: "asc" }, { pocket: "asc" }, { sequence: "asc" }, { id: "asc" }],
+          });
+      if (wanted) {
+        await tx.cardplacement.update({
+          where: { id: wanted.id },
+          data: { orderlineid: lineId },
+        });
+      }
 
       // The wish has been answered.
       await tx.wishlist.delete({ where: { id: match.wishlistid } });

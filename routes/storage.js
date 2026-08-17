@@ -234,7 +234,7 @@ router.get(
 
     if (unit.type === "binder") {
       const maxPage = await prisma.cardplacement.aggregate({
-        where: { storageid: id },
+        where: { storageid: id, orderlineid: null },
         _max: { page: true },
       });
       base.maxPage = maxPage._max.page ?? 1;
@@ -245,7 +245,9 @@ router.get(
           ? null
           : Math.max(0, parseInt(req.query.spread, 10) || 0);
 
-      const where = { storageid: id };
+      // A copy sitting in someone's pick-up bag is not physically in the
+      // binder, even though its address is retained so it can be refiled.
+      const where = { storageid: id, orderlineid: null };
       if (spread !== null) {
         base.spread = spread;
         where.page = { in: pagesInSpread(spread).filter((p) => p !== null) };
@@ -288,7 +290,7 @@ router.get(
 
     // Boxes: a flat list. Sorted boxes carry a sequence, unsorted ones do not.
     const placements = await prisma.cardplacement.findMany({
-      where: { storageid: id },
+      where: { storageid: id, orderlineid: null },
       include: CARD_INCLUDE,
       orderBy:
         unit.type === "sorted_box" ? { sequence: "asc" } : { id: "asc" },

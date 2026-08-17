@@ -28,6 +28,19 @@ export const expiryFromNow = () =>
 // cron would notice, and there is nowhere reliable to run a scheduler anyway
 // (an in-process timer would fire once per dyno).
 export async function releaseExpiredOrders(prisma) {
+  // Anything the shop set aside for an order that has now lapsed goes back on
+  // the shelf, so it stops being invisible in its container.
+  const lapsing = await prisma.order.findMany({
+    where: { status: "pending", expires: { not: null, lt: nowSeconds() } },
+    select: { id: true },
+  });
+  if (lapsing.length) {
+    await prisma.cardplacement.updateMany({
+      where: { orderline: { orderid: { in: lapsing.map((o) => o.id) } } },
+      data: { orderlineid: null },
+    });
+  }
+
   // Orders stored with a null expiry are excluded by this filter, so they are
   // untouched whether or not RESERVATION_DAYS is set now. Turning expiry on
   // later only affects orders placed from that point.
@@ -55,4 +68,41 @@ export async function reservedByCard(prisma, cardIds) {
 // Available = stock minus whatever is being held for someone.
 export function availableOf(card, reserved) {
   return Math.max(0, card.quantity - (reserved.get(card.id) ?? 0));
+}
+
+// Put a cancelled or expired order's cards back where they came from.
+//
+// Placements are retained while a copy sits in a bag precisely so this can
+// work: clearing the link puts the card back in its pocket or box slot, which
+// is also the answer to "where does this go?".
+export async function refileOrder(tx, orderId) {
+  const { count } = await tx.cardplacement.updateMany({
+    where: { orderline: { orderid: orderId } },
+    data: { orderlineid: null },
+  });
+  return count;
+}
+
+// Where each card in an order belongs, for the shop to put them back.
+export async function refileInstructions(prisma, orderId) {
+  const placements = await prisma.cardplacement.findMany({
+    where: { orderline: { orderid: orderId } },
+    include: {
+      storage: { select: { id: true, name: true, type: true } },
+      card: { include: { cardgeneral: { select: { name: true, cardsetcode: true } } } },
+    },
+  });
+  return placements.map((pl) => ({
+    placementid: pl.id,
+    cardid: pl.cardid,
+    name: pl.card?.cardgeneral?.name ?? null,
+    cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
+    storageid: pl.storage?.id ?? null,
+    storagename: pl.storage?.name ?? null,
+    storagetype: pl.storage?.type ?? null,
+    page: pl.page,
+    pocket: pl.pocket,
+    depth: pl.depth,
+    sequence: pl.sequence,
+  }));
 }

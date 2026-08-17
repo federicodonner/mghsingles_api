@@ -14,6 +14,7 @@ import {
   releaseExpiredOrders,
   reservedByCard,
   availableOf,
+  refileOrder,
   expiryFromNow,
   nowSeconds,
 } from "../services/orders.js";
@@ -203,9 +204,13 @@ router.delete(
       return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
     }
 
-    await prisma.order.update({
-      where: { id },
-      data: { status: "cancelled", closed: nowSeconds() },
+    await prisma.$transaction(async (tx) => {
+      // Anything the shop had set aside goes back to its pocket.
+      await refileOrder(tx, id);
+      await tx.order.update({
+        where: { id },
+        data: { status: "cancelled", closed: nowSeconds() },
+      });
     });
 
     return res.status(200).json({ message: messages.ORDER_CANCELLED });
