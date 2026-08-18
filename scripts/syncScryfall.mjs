@@ -24,7 +24,7 @@
 // regeneration. This records every run in `syncrun` and skips outright when the
 // id has not moved, so scheduling it daily — or more often — costs one small
 // HTTP request on the days there is nothing new.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../services/prisma.js";
 import { createGunzip } from "node:zlib";
 import { Readable } from "node:stream";
 import readline from "node:readline";
@@ -48,7 +48,7 @@ const LIMIT = (() => {
   return i === -1 ? Infinity : parseInt(args[i + 1], 10);
 })();
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 // Colours are stored in WUBRG order so the same card always yields the same
 // string, whatever order Scryfall happens to list them in.

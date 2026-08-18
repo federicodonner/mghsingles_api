@@ -524,10 +524,36 @@ unset and every query fails at runtime. Don't use it.
   columns are now `@default([])` and NOT NULL. Check with
   `\d cardgeneral` before trusting any list filter.
 
-- **The Prisma CLI is pinned to 6.14.0 as a devDependency.** It used to be
-  absent, so `npx prisma` floated to whatever was newest — by now Prisma 7,
-  which refuses to read this schema at all (`url` in the datasource block is no
-  longer supported). Run it as `./node_modules/.bin/prisma`, not `npx prisma`.
+- **Prisma 7, with the `pg` driver adapter.** Three things moved:
+
+  - **The connection URL lives in `prisma.config.js`**, not in the schema. A
+    `datasource` block with `url` is rejected outright. The config file is
+    plain JS (Prisma accepts .js/.mjs/.cjs as well as .ts) and has to load
+    dotenv itself — v7 no longer reads .env for you.
+  - **There is no query engine binary.** v7 talks to Postgres through
+    `@prisma/adapter-pg`, so a client is built with an adapter rather than a
+    URL. `services/prisma.js` is the only place that does it: import the
+    default export for the API's long-lived client, or `createPrismaClient()`
+    in a script or the Lambda, each of which is its own process. This is what
+    makes the Lambda bundle portable — see lambda/priceSync.mjs.
+  - **TLS is validated by default now.** v6 ignored certificates entirely.
+    Heroku Postgres serves a self-signed one, so `services/prisma.js` sets
+    `rejectUnauthorized: false` in production and no TLS locally — the same
+    rule `config/db.js` already applied to the legacy CardKingdom scrape.
+    Change one, change the other.
+
+  The generator stays `prisma-client-js`. v7's new `prisma-client` generator
+  emits TypeScript — `generatedFileExtension` accepts only ts/mts/cts — and
+  this is a plain-JS project, so adopting it would mean a TypeScript build step
+  purely to consume generated code. The engine removal applies either way.
+
+- **Pin the Prisma CLI; run it as `./node_modules/.bin/prisma`.** It used to be
+  absent from package.json entirely, so `npx prisma` floated to whatever was
+  newest and one day started refusing to read the schema. Both CLI and client
+  are on 7.9.1; keep them in lockstep.
+
+- **Node 22.x.** `engines` said `16.x` for a long while, which no Prisma this
+  project has ever run actually supported — v7 wants 20.19+.
 
 - **A container has four states, and only `for_sale` sells.** `storage.state` is
   `for_sale` / `retired` / `released` / `returning`, replacing an `inshop`

@@ -5,10 +5,10 @@
 //
 // The logic lives in services/priceSync.mjs so the identical code can run from
 // a Lambda (see lambda/priceSync.mjs) without being duplicated or restructured.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../services/prisma.js";
 import { syncPrices } from "../services/priceSync.mjs";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const log = (msg) => process.stdout.write(`${msg}\n`);
 
 try {

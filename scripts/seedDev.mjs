@@ -16,12 +16,12 @@
 // up, so the condition multipliers visibly hold.
 //
 // REFUSES to run against a non-local database. This deletes people's orders.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../services/prisma.js";
 import { hash } from "bcrypt";
 import { applyReferencePrices } from "../services/pricing.js";
 import { PAPER_ONLY } from "../services/paper.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const now = Math.round(Date.now() / 1000);
 const DAY = 86400;
 

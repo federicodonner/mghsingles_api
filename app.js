@@ -6,12 +6,11 @@ const { json } = pkg;
 // be the fallback and collided with an unrelated project on this machine, which
 // made the API fail to boot with EADDRINUSE rather than anything informative.
 const PORT = process.env.PORT || 3101;
-import { PrismaClient } from "@prisma/client";
+import prisma from "./services/prisma.js";
 
 import messages from "./data/messages.js";
 
 const app = express();
-const prisma = new PrismaClient();
 
 app.use(
   urlencoded({

@@ -18,12 +18,12 @@
 // Resolved matches are left in place as a record. Unresolved ones are recomputed
 // every run, so a match disappears by itself if the card sells, the wishlist
 // entry is deleted, or the customer narrows their constraints past it.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../services/prisma.js";
 import { matches } from "../routes/wishlist.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const DRY_RUN = process.argv.includes("--dry-run");
 const now = () => Math.round(Date.now() / 1000);
 

@@ -12,11 +12,12 @@
 //    environment. If the database ever moves inside a VPC, the function has to
 //    move with it and will then need a NAT for the MTGJSON download.
 //
-//  * Prisma ships a native query engine per platform. Building on macOS and
-//    zipping will NOT work — add the Lambda target to schema.prisma:
-//      generator client { binaryTargets = ["native", "rhel-openssl-3.0.x"] }
-//    or deploy as a container image built on Amazon Linux, which avoids the
-//    question entirely.
+//  * No native binary to worry about. Prisma 6 shipped a Rust query engine
+//    compiled per platform, so a bundle zipped on macOS carried a darwin binary
+//    and failed only once deployed — the fix was a `binaryTargets` entry in
+//    schema.prisma, or building in a container. Prisma 7 removed the engine
+//    entirely and talks to Postgres through the `pg` driver adapter, so the
+//    bundle is portable and about a third of the size.
 //
 //  * Timeout: the run takes ~15s against a warm database, and the first run
 //    also downloads the 15MB identifier map. Allow 5 minutes. Memory 512MB is
@@ -25,10 +26,10 @@
 //  * One connection per invocation. The client is created outside the handler
 //    so a warm container reuses it, and is deliberately NOT disconnected on
 //    success for the same reason.
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "../services/prisma.js";
 import { syncPrices } from "../services/priceSync.mjs";
 
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 
 export async function handler() {
   const lines = [];

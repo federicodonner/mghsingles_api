@@ -1,10 +1,23 @@
+// Prisma 7: the client is generated into the repo rather than into
+// node_modules, so the import path is a real file and the generated code is
+// visible. It is gitignored — `npm run build` regenerates it, which is also
+// what Heroku runs on deploy.
+// Kept on `prisma-client-js`, not v7's new `prisma-client` generator. The new
+// one emits TypeScript — its `generatedFileExtension` only accepts ts/mts/cts —
+// and this project is plain JavaScript, so adopting it would mean adding a
+// TypeScript build step purely to consume generated code. `prisma-client-js`
+// still works in v7 and still emits JS into node_modules.
+//
+// The v7 benefit is not in the generator anyway: it is the removal of the Rust
+// query engine, which applies either way.
 generator client {
   provider = "prisma-client-js"
 }
 
+// The connection URL lives in prisma.config.js now; a datasource block that
+// carries `url` is rejected outright by the v7 CLI.
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 model card {
