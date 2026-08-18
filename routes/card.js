@@ -8,6 +8,11 @@ import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
 import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
+import {
+  PAPER_ONLY,
+  PAPER_SETS_ONLY,
+  isPaperPrinting,
+} from "../services/paper.js";
 
 async function getExternalUrl(path) {
   const options = {
@@ -211,11 +216,9 @@ router.get(
 
     // Finds the card in the database
     const cards = await prisma.cardgeneral.findMany({
-      where: { name: { contains: cardName, mode: "insensitive" } },
+      where: { name: { contains: cardName, mode: "insensitive" }, ...PAPER_ONLY },
       orderBy: [{ name: "asc" }, { cardsetcode: "asc" }],
     });
-
-    console.log(cards);
 
     if (!cards) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
@@ -243,7 +246,7 @@ router.get("/set/:setId", [check("setId").escape()], asyncHandler(async (req, re
   const prisma = req.prisma;
 
   const cards = await prisma.cardgeneral.findMany({
-    where: { cardsetcode: setId },
+    where: { cardsetcode: setId, ...PAPER_ONLY },
   });
 
   if (!cards) {
@@ -291,6 +294,7 @@ router.get("/sets", asyncHandler(async (req, res) => {
   const prisma = req.prisma;
 
   const sets = await prisma.cardset.findMany({
+    where: PAPER_SETS_ONLY,
     orderBy: [{ releasedate: "desc" }, { cardsetname: "asc" }],
   });
 
@@ -386,6 +390,14 @@ router.post(
       // If there are no results, return error
       if (!cardsInCardsGeneral) {
         return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+
+      // A digital-only printing cannot be graded, sleeved or handed over a
+      // counter. The importer keeps these out of the catalogue entirely; this
+      // is the boundary check, so a stale row from an older dump still cannot
+      // become stock.
+      if (!isPaperPrinting(cardsInCardsGeneral)) {
+        return res.status(400).json({ message: messages.CARD_DIGITAL_ONLY });
       }
 
       // Half of all printings exist in only one finish, so a copy cannot claim

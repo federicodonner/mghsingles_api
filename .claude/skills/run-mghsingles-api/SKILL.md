@@ -490,6 +490,45 @@ unset and every query fails at runtime. Don't use it.
   `services/storageContents.js` are the only place that arithmetic lives; import
   them rather than repeating it.
 
+- **The catalogue is paper-only, and that is enforced in three places.** The
+  shop sells cardboard; Scryfall's `games` says where a printing exists (paper /
+  mtgo / arena) and about **8% of `default_cards` is digital-only** — Alchemy
+  rebalances, Arena promos, MTGO treasure-chest printings. A full sync writes
+  107,355 of 116,712 rows and purges the rest.
+
+  The test is per printing, never per set. `A-Acererak the Archlich` lives in
+  `afr` — Adventures in the Forgotten Realms, a perfectly physical set — but the
+  printing itself is `games: ["arena"]`. Filtering by `cardset.digital` alone
+  misses 228 such rows.
+
+  1. `scripts/syncScryfall.mjs` refuses to write a non-paper row, and purges
+     ones an earlier import wrote. It only deletes ids Scryfall positively
+     identified as non-paper **in that run** — never "everything we did not
+     see", which would also catch a printing merely withdrawn upstream — and a
+     `--limit` run never purges, since it has not read the whole file. A
+     printing that stock or a sale references is kept and reported instead of
+     deleted; the row is the only record of what that card was.
+  2. `services/paper.js` states the same rule for queries: `PAPER_ONLY` for
+     cardgeneral, `PAPER_SETS_ONLY` for the set picker, `isPaperPrinting()` for
+     a row in hand. `/card/versions`, `/card/set/:setId` and `/card/sets` all
+     filter, and `POST /card/:collectionId` returns `CARD_DIGITAL_ONLY`.
+  3. The database itself: `cardgeneral.games` is stored, so the invariant is
+     checkable — `SELECT count(*) FROM cardgeneral WHERE NOT ('paper' =
+     ANY(games))` should always be 0.
+
+- **Prisma scalar lists: `isEmpty` does not match SQL NULL.** `db push` created
+  `games` and `finishes` as nullable with no default, and Prisma's client reads
+  a NULL array back as `[]` — so a row looks empty in JS while
+  `games: { isEmpty: true }` skips it entirely. A filter written against that
+  matched **0 of 116,712 rows** and would have blanked the catalogue. Both
+  columns are now `@default([])` and NOT NULL. Check with
+  `\d cardgeneral` before trusting any list filter.
+
+- **The Prisma CLI is pinned to 6.14.0 as a devDependency.** It used to be
+  absent, so `npx prisma` floated to whatever was newest — by now Prisma 7,
+  which refuses to read this schema at all (`url` in the datasource block is no
+  longer supported). Run it as `./node_modules/.bin/prisma`, not `npx prisma`.
+
 - **A container has four states, and only `for_sale` sells.** `storage.state` is
   `for_sale` / `retired` / `released` / `returning`, replacing an `inshop`
   boolean that was purely decorative — a card in a container marked "taken home"

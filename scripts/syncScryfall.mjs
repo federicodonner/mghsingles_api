@@ -55,6 +55,17 @@ const prisma = new PrismaClient();
 const WUBRG = ["W", "U", "B", "R", "G"];
 const sortWUBRG = (a, b) => WUBRG.indexOf(a) - WUBRG.indexOf(b);
 
+// The shop sells cardboard. Scryfall's `games` says where a printing exists —
+// paper, mtgo, arena — and roughly 8% of `default_cards` is digital-only:
+// Alchemy rebalances, Arena-only promos, MTGO treasure-chest printings. Those
+// cannot be graded, put in a binder or handed across a counter, so they must
+// never enter the catalogue.
+//
+// The check is on the printing's own `games`, not on whether its set is
+// digital: a paper set can still carry an MTGO-only printing, and that one
+// printing is just as unsellable as a whole Alchemy set.
+export const isPaper = (card) => (card.games ?? []).includes("paper");
+
 function log(msg) {
   process.stdout.write(`${msg}\n`);
 }
@@ -94,17 +105,26 @@ async function syncSets() {
     const slice = sets.slice(i, i + BATCH);
     const values = [];
     const rows = slice.map((s, n) => {
-      const b = n * 4;
-      values.push(s.code, s.name, new Date(s.released_at ?? "1993-08-05"), s.icon_svg_uri ?? null);
-      return `($${b + 1},$${b + 2},$${b + 3},$${b + 4})`;
+      const b = n * 5;
+      values.push(
+        s.code,
+        s.name,
+        new Date(s.released_at ?? "1993-08-05"),
+        s.icon_svg_uri ?? null,
+        // Arena/MTGO-only sets. Imported rather than skipped so the foreign key
+        // stays satisfiable, and filtered out where a human picks a set.
+        s.digital === true
+      );
+      return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5})`;
     });
     await prisma.$executeRawUnsafe(
-      `INSERT INTO cardset (cardset, cardsetname, releasedate, iconsvguri)
+      `INSERT INTO cardset (cardset, cardsetname, releasedate, iconsvguri, digital)
        VALUES ${rows.join(",")}
        ON CONFLICT (cardset) DO UPDATE SET
          cardsetname = EXCLUDED.cardsetname,
          releasedate = EXCLUDED.releasedate,
-         iconsvguri  = EXCLUDED.iconsvguri`,
+         iconsvguri  = EXCLUDED.iconsvguri,
+         digital     = EXCLUDED.digital`,
       ...values
     );
   }
@@ -139,6 +159,9 @@ function toRow(card, now) {
     card.released_at ? Number(card.released_at.slice(0, 4)) : null,
     // Which finishes this printing exists in: nonfoil / foil / etched.
     card.finishes ?? [],
+    // Where it exists: paper / mtgo / arena. Always contains paper by the time
+    // it reaches here — see isPaper — but "also on mtgo" is worth keeping.
+    card.games ?? [],
     // Prices ride along free in the same payload. Nothing reads them yet.
     card.prices?.usd ?? null,
     card.prices?.usd_foil ?? null,
@@ -152,7 +175,7 @@ const COLUMNS = [
   "scryfallid", "name", "cardsetcode", "cardsetname", "image",
   "borderless", "showcase", "phyrexian", "extendedart", "retroframe",
   "boxtopper", "color", "rarity", "collectornumber", "releasedatyear",
-  "finishes",
+  "finishes", "games",
   "priceusd", "priceusdfoil", "priceusdetched", "priceeur", "pricesupdated",
 ];
 
@@ -166,6 +189,7 @@ const CASTS = {
   priceeur: "::numeric",
   // Node gives Postgres a JS array; tell it the column type explicitly.
   finishes: "::text[]",
+  games: "::text[]",
 };
 
 async function flush(rows) {
@@ -235,6 +259,10 @@ async function main() {
   let seen = 0;
   let written = 0;
   let skipped = 0;
+  let digitalSkipped = 0;
+  // Ids Scryfall says are digital-only. Collected so a run can remove rows that
+  // an earlier, unfiltered import already wrote — roughly 9k of them.
+  const digitalIds = [];
   const missingSets = new Set();
   let batch = [];
 
@@ -244,6 +272,13 @@ async function main() {
     seen++;
 
     const card = JSON.parse(line);
+
+    // Digital-only printings never reach the catalogue.
+    if (!isPaper(card)) {
+      digitalSkipped++;
+      digitalIds.push(card.id);
+      continue;
+    }
 
     // A card whose set is not in cardset would violate the foreign key.
     if (!knownSets.has(card.set)) {
@@ -265,9 +300,59 @@ async function main() {
     written += batch.length;
   }
 
+  // Remove anything an earlier import wrote before this filter existed.
+  //
+  // Only ids Scryfall positively identifies as non-paper in THIS run are
+  // touched — never "everything we did not see", which would also catch a
+  // printing that merely vanished upstream. A partial run cannot purge at all,
+  // since it has not seen the whole file and its list of digital ids is
+  // meaningless.
+  let purged = 0;
+  let purgeBlocked = [];
+  if (!DRY_RUN && LIMIT === Infinity && digitalIds.length) {
+    for (let i = 0; i < digitalIds.length; i += BATCH) {
+      const slice = digitalIds.slice(i, i + BATCH);
+
+      // A printing somebody actually owns or has sold stays put: the row is the
+      // only record of what that card was. The foreign keys are NO ACTION, so
+      // this would fail loudly anyway — checking first turns it into a report.
+      const [held, sold] = await Promise.all([
+        prisma.card.findMany({
+          where: { scryfallid: { in: slice } },
+          select: { scryfallid: true },
+        }),
+        prisma.sale.findMany({
+          where: { scryfallid: { in: slice } },
+          select: { scryfallid: true },
+        }),
+      ]);
+      const referenced = new Set([
+        ...held.map((r) => r.scryfallid),
+        ...sold.map((r) => r.scryfallid),
+      ]);
+      purgeBlocked.push(...referenced);
+
+      const deletable = slice.filter((id) => !referenced.has(id));
+      if (!deletable.length) continue;
+      const result = await prisma.cardgeneral.deleteMany({
+        where: { scryfallid: { in: deletable } },
+      });
+      purged += result.count;
+    }
+    if (purged || purgeBlocked.length) {
+      log(
+        `  purged ${purged} digital-only printing(s) written by an earlier import` +
+          (purgeBlocked.length
+            ? `; ${purgeBlocked.length} kept because stock or a sale references them`
+            : "")
+      );
+    }
+  }
+
   const secs = ((Date.now() - started) / 1000).toFixed(1);
   log(
-    `${DRY_RUN ? "[dry run] " : ""}cards: ${written} written, ${skipped} skipped, ` +
+    `${DRY_RUN ? "[dry run] " : ""}cards: ${written} written, ` +
+      `${digitalSkipped} digital-only, ${skipped} skipped, ` +
       `${seen} read in ${secs}s`
   );
 

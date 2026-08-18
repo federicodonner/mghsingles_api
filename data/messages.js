@@ -49,6 +49,8 @@ const messages = {
   STORAGE_RETURNING: "Avisaste que traés el contenedor a la tienda.",
   STORAGE_FOR_SALE: "El contenedor está en la tienda y sus cartas a la venta.",
   CARD_NOT_YOURS: "Esa carta no es tuya.",
+  CARD_DIGITAL_ONLY:
+    "Esa versión sólo existe en formato digital (Arena o MTGO), no se puede vender en la tienda.",
   PLACEMENT_COMMITTED:
     "Esa copia está apartada para un pedido, no se puede mover hasta entregarla.",
   COPY_ALREADY_PLACED: "Esa copia ya está guardada en un contenedor.",

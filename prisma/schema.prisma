@@ -80,7 +80,17 @@ model cardgeneral {
   /// in only one of them — 38% are nonfoil-only and 12% are foil-only — so this
   /// is what stops the shop recording a foil copy of a card that has no foil,
   /// or offering a foil filter for one.
-  finishes        String[]
+  finishes        String[] @default([])
+  /// Where this printing exists, straight from Scryfall's `games`: paper,
+  /// mtgo, arena. The shop sells cardboard, so a printing without `paper` in
+  /// this list must never reach the store — an Alchemy rebalance or an
+  /// Arena-only promo cannot be put in a binder.
+  ///
+  /// The importer already refuses to write a non-paper row, so in practice
+  /// every value here contains "paper". It is stored anyway because that makes
+  /// the invariant checkable in SQL rather than only true by assertion, and
+  /// because "also on mtgo" is real information about a real card.
+  games           String[] @default([])
   /// MTGJSON's own id for this printing. Stored once so the DAILY price file
   /// (5MB) can be joined without re-downloading the identifier map (15MB), which
   /// never changes for an existing printing.
@@ -109,6 +119,11 @@ model cardset {
   cardsetname String
   releasedate DateTime
   iconsvguri  String?
+  /// Scryfall's `digital` flag: the set exists only on Arena or MTGO. Kept
+  /// rather than skipped so the row stays available to any historical
+  /// cardgeneral that references it, and filtered out of the set list the
+  /// admin picks from — an all-digital set can only ever be an empty option.
+  digital     Boolean       @default(false)
   cardset     String        @id
   cardgeneral cardgeneral[]
 }

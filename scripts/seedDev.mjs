@@ -19,6 +19,7 @@
 import { PrismaClient } from "@prisma/client";
 import { hash } from "bcrypt";
 import { applyReferencePrices } from "../services/pricing.js";
+import { PAPER_ONLY } from "../services/paper.js";
 
 const prisma = new PrismaClient();
 const now = Math.round(Date.now() / 1000);
@@ -135,7 +136,10 @@ async function makePeople() {
 // CardKingdom reference price so the pricing rules have something to work on.
 async function resolvePrintings() {
   const rows = await prisma.cardgeneral.findMany({
-    where: { name: { in: WANTED }, image: { not: null } },
+    // Paper only, stated rather than assumed: the importer keeps digital-only
+    // printings out of cardgeneral entirely, but seeding stock from an Alchemy
+    // rebalance would be a silent lie about what is in the shop.
+    where: { name: { in: WANTED }, image: { not: null }, ...PAPER_ONLY },
     include: { cardprice: { where: { source: "cardkingdom" } } },
   });
 
