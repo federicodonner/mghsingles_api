@@ -40,6 +40,12 @@ function flattenCard(card, reserved, offSale) {
     variant: card.variant,
     condition: cardcondition?.name ?? null,
     language: cardlanguage?.name ?? null,
+    // The ids as well as the names: wishlisting from a storefront tile pins the
+    // entry to THIS printing, grade, language and finish, and the constraint
+    // lists are by id. Not sensitive — they are the same public reference data
+    // /card/modifiers already serves.
+    conditionid: card.conditionid,
+    languageid: card.languageid,
     price: card.price,
     quantity: card.quantity,
     reserved: reserved.get(card.id) ?? 0,

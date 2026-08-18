@@ -120,6 +120,54 @@ router.get(
   })
 );
 
+// Which of these stock rows are already covered by this customer's wishlist.
+//
+//   /wishlist/covers?cardids=12,13,14  ->  { "12": true, "13": false, ... }
+//
+// The storefront asks this to decide whether a tile's button offers to add the
+// card or reports that it is already wanted. It has to be per STOCK ROW, not
+// per name: an entry pinned to the Tenth Edition printing does not cover the
+// Secret Lair one, and a button saying "already on your list" over a version
+// the wishlist will never match is a lie.
+//
+// It runs the same `matches` the scheduled matcher uses, rather than the
+// storefront reimplementing that logic — two copies of a matching rule is two
+// rules, and the one the customer sees would drift from the one that actually
+// sets cards aside.
+router.get(
+  "/covers",
+  asyncHandler(async (req, res) => {
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const ids = String(req.query.cardids ?? "")
+      .split(",")
+      .map((n) => parseInt(n, 10))
+      .filter((n) => n > 0)
+      .slice(0, 200);
+    if (!ids.length) return res.status(200).json({});
+
+    const [entries, cards] = await Promise.all([
+      prisma.wishlist.findMany({ where: { playerid: playerId } }),
+      prisma.card.findMany({
+        where: { id: { in: ids } },
+        include: { cardgeneral: { select: { name: true } } },
+      }),
+    ]);
+
+    const byName = new Map();
+    for (const entry of entries) byName.set(entry.name.toLowerCase(), entry);
+
+    const covered = {};
+    for (const card of cards) {
+      const entry = byName.get((card.cardgeneral?.name ?? "").toLowerCase());
+      covered[card.id] = Boolean(entry && matches(entry, card));
+    }
+
+    return res.status(200).json(covered);
+  })
+);
+
 // Every printing of a wishlisted card, for the version picker.
 //
 // Exact name match, unlike /card/versions/:cardName which is a substring
@@ -162,6 +210,17 @@ router.get(
   })
 );
 
+// Merge two constraint lists.
+//
+// An EMPTY list means "any", so it is not a neutral element: unioning [X] into
+// [] would turn "any printing" into "only X", quietly narrowing an entry the
+// customer had left open. Either side being empty therefore keeps it empty.
+function union(current, incoming) {
+  if (!current.length || !incoming.length) return [];
+  const seen = new Set(current);
+  return [...current, ...incoming.filter((v) => !seen.has(v))];
+}
+
 // Add a card name to the wishlist, optionally constrained from the start.
 router.post(
   "/",
@@ -192,8 +251,26 @@ router.post(
         name: { equals: known.name, mode: "insensitive" },
       },
     });
+    // One entry per name per player, so a second add for the same card widens
+    // the entry it already has rather than failing.
+    //
+    // The widening is per category, because that is how the constraints are
+    // modelled: adding a second printing to an entry that names one grade does
+    // NOT produce two exact combinations, it produces every combination of the
+    // two printings and that grade. Precision holds for the first add — which
+    // is the case that matters, since the matcher then sets aside exactly the
+    // copy that was clicked — and degrades honestly from there.
     if (existing) {
-      return res.status(400).json({ message: messages.WISHLIST_REPEAT });
+      const merged = await prisma.wishlist.update({
+        where: { id: existing.id },
+        data: {
+          versions: union(existing.versions, readStrings(req.body.versions)),
+          languageids: union(existing.languageids, readIds(req.body.languageids)),
+          conditionids: union(existing.conditionids, readIds(req.body.conditionids)),
+          variants: union(existing.variants, readStrings(req.body.variants)),
+        },
+      });
+      return res.status(200).json({ ...merged, widened: true });
     }
 
     const entry = await prisma.wishlist.create({

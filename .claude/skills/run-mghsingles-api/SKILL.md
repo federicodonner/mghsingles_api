@@ -497,6 +497,29 @@ unset and every query fails at runtime. Don't use it.
   side removed a card scan, two groupBy queries and an expiry sweep from every
   load. `/admin/wishlist` still reports coverage; that is the shop's view.
 
+- **Wishlisting from the storefront pins the exact copy.** Everything on that
+  page is in stock, so the next matcher run sets the card aside within minutes —
+  an entry that named only the card would let the shop bag any other printing it
+  happens to have. The POST therefore sends `versions`, `conditionids`,
+  `languageids` and `variants` for the clicked row, and `/store/search` returns
+  `conditionid`/`languageid` so it can.
+
+  `POST /wishlist` on a name that already has an entry now WIDENS it rather
+  than returning 400 — there is one entry per name per player. The widening is
+  per category, which is a real limitation worth knowing: adding a second
+  printing to an entry that names one grade yields every combination of the two
+  printings and that grade, not two exact combinations. Precision holds for the
+  first add, which is the case that matters, and degrades honestly after.
+  `union()` keeps an empty list empty, because empty means "any" and unioning
+  into it would silently narrow an entry the customer left open.
+
+- **`GET /wishlist/covers?cardids=` drives the storefront button state.** Per
+  STOCK ROW, not per name: an entry pinned to the Tenth Edition printing does
+  not cover the Secret Lair one, and a button reading "already on your list"
+  over a version the wishlist will never match is a lie. It runs the same
+  `matches` the scheduled matcher uses, so what the customer sees cannot drift
+  from what actually gets set aside.
+
 - **`GET /card/names?q=` feeds the autocomplete.** Distinct NAMES, not printings
   — the twelve printings of Lightning Bolt are one suggestion. It searches the
   CATALOGUE, not stock, because wanting a card the shop does not have is the

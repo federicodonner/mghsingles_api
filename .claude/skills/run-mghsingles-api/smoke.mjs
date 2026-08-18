@@ -134,6 +134,7 @@ const PROBES = [
   ["/mystorage", true],
   ["/order", true],
   ["/wishlist", true],
+  ["/wishlist/covers?cardids=1,2", true],
   ["/admin/order", true],
   ["/admin/wishlist", true],
   ["/admin/condition", true],
