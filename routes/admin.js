@@ -1062,4 +1062,96 @@ router.put(
   })
 );
 
+// --------------------------------------------------------------------------
+// Stock search, for the counter
+// --------------------------------------------------------------------------
+
+// Find stock by card name, with everything the shop needs to price or sell it.
+//
+// This used to be `/store/search/:name`, which the storefront also served —
+// meaning an unauthenticated shopper could read the consignor's name, the
+// commission percentage and the CardKingdom buylist price for every card in the
+// shop. The public route now returns a narrow shape and this one, behind the
+// staff gate, carries the commercially sensitive fields.
+router.get(
+  "/cards/search",
+  [check("q").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const q = String(req.query.q).trim();
+
+    await releaseExpiredOrders(prisma);
+
+    const cards = await prisma.card.findMany({
+      where: {
+        collection: { active: true },
+        cardgeneral: { name: { contains: q, mode: "insensitive" } },
+      },
+      include: {
+        cardgeneral: {
+          include: { cardprice: { where: { source: "cardkingdom" } } },
+        },
+        cardcondition: { select: { name: true } },
+        cardlanguage: { select: { name: true } },
+        collection: {
+          select: { id: true, percent: true, player: { select: { name: true } } },
+        },
+      },
+      take: 200,
+    });
+
+    const { reserved, offSale } = await availabilityFor(prisma, cards);
+
+    const flattened = cards
+      .map((card) => {
+        const { cardgeneral: g, cardcondition, cardlanguage, collection } = card;
+        // The CardKingdom quote for THIS printing and finish, so the shop can
+        // price against a reference rather than from memory.
+        const reference = (g?.cardprice ?? []).find(
+          (row) => row.finish === (card.variant || "nonfoil")
+        );
+        return {
+          id: card.id,
+          scryfallid: card.scryfallid,
+          cardname: g?.name ?? null,
+          image: g?.image ?? null,
+          cardsetcode: g?.cardsetcode ?? null,
+          cardsetname: g?.cardsetname ?? null,
+          typeline: g?.typeline ?? null,
+          variant: card.variant,
+          condition: cardcondition?.name ?? null,
+          language: cardlanguage?.name ?? null,
+          quantity: card.quantity,
+          reserved: reserved.get(card.id) ?? 0,
+          offsale: offSale.get(card.id) ?? 0,
+          available: availableOf(card, reserved, offSale),
+          price: card.price,
+          buyprice: card.buyprice,
+          pricelocked: card.pricelocked,
+          buypricelocked: card.buypricelocked,
+          ckretail: reference?.retail ?? null,
+          ckbuylist: reference?.buylist ?? null,
+          ckpricedate: reference?.pricedate ?? null,
+          collection: collection?.id ?? null,
+          player: collection?.player?.name ?? null,
+          percent: collection?.percent ?? null,
+        };
+      })
+      .sort((a, b) => (a.cardname ?? "").localeCompare(b.cardname ?? ""));
+
+    if (!flattened.length) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+
+    return res.status(200).json({
+      numberOfCards: flattened.length,
+      cards: flattened,
+    });
+  })
+);
+
 export default router;

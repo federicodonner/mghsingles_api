@@ -117,8 +117,8 @@ if (token) {
 }
 
 const PROBES = [
-  ["/store/1", false],
-  ["/store/search/bolt", false],
+  ["/store/filters", false],
+  ["/store/search?name=a", false],
   ["/card/modifiers", false],
   ["/card/sets", false],
   ["/card/set/lea", false],
@@ -138,6 +138,7 @@ const PROBES = [
   ["/admin/condition", true],
   ["/admin/player", true],
   ["/admin/match", true],
+  ["/admin/cards/search?q=a", true],
   ["/notification", true],
 ];
 

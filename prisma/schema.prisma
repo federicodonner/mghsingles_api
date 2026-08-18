@@ -87,6 +87,14 @@ model cardgeneral {
   boxtopper       Boolean @default(false)
   color           String?
   rarity          String?
+  /// Scryfall's `type_line`, verbatim: "Legendary Creature — Zombie Wizard".
+  /// Stored whole rather than split into a primary type, so the shop can filter
+  /// on "Creature" and a shopper can still find "Zombie" — splitting it would
+  /// throw away the subtypes, and the line is what Scryfall considers canonical.
+  ///
+  /// Double-faced cards carry it on the faces; the front face's line is used,
+  /// which is the one printed on the card you would pull out of a binder.
+  typeline        String?
   collectornumber String?
   /// Which finishes this printing was actually produced in, straight from
   /// Scryfall's `finishes`: nonfoil, foil, etched. Half of all printings exist

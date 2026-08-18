@@ -490,6 +490,24 @@ unset and every query fails at runtime. Don't use it.
   `services/storageContents.js` are the only place that arithmetic lives; import
   them rather than repeating it.
 
+- **`/store` is public and searches STOCK; `/admin/cards/search` is staff-only.**
+  The storefront never lists the card game — only what the shop has, filtered to
+  `available > 0`, so a shopper cannot click into emptiness. `GET /store/search`
+  takes `name`, `set`, `type`, `colors` and `page`, and refuses a request with no
+  criteria at all: an unfiltered search is a request for the whole shop, which is
+  what that page stopped doing. `GET /store/filters` returns the sets, types and
+  colours **present in stock**, so the dropdowns offer 43 sets rather than 986.
+
+  This split exists because `/store/search/:name` used to serve both and sat
+  behind no authentication, so anyone could read the consignor's name, the
+  commission percentage and the CardKingdom buylist for every card. The public
+  shape now carries none of those; the admin shape, behind the staff gate, does.
+
+  Availability cannot be a SQL filter — it is quantity minus holds minus
+  off-sale containers, none of which live on the card row — so matches are
+  capped at `MAX_MATCHES` and the response sets `truncated` rather than silently
+  serving a partial answer.
+
 - **The catalogue is paper-only, and that is enforced in three places.** The
   shop sells cardboard; Scryfall's `games` says where a printing exists (paper /
   mtgo / arena) and about **8% of `default_cards` is digital-only** — Alchemy

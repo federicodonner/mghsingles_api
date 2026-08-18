@@ -19,6 +19,8 @@ const messages = {
   TOO_MANY_CARDS:
     "Tu búsqueda devolvió demasiadas cartas, por favor intenta nuevamente con términos más específicos.",
   SEARCH_NOT_FOUND: "Carta no encontrada, por favor verifique la búsqueda.",
+  SEARCH_NEEDS_CRITERIA:
+    "Escribe un nombre o elegí un filtro para buscar en la tienda.",
   SALE_REPEAT_CARDS: "Hay cartas repetidas en la venta, por favor verifíquela.",
   SALE_NOT_ENOUGH_STOCK:
     "No hay stock suficiente de una de las cartas para la venta.",

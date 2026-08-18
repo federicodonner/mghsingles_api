@@ -155,6 +155,9 @@ function toRow(card, now) {
     promoTypes.includes("boxtopper"),
     (card.colors ?? []).slice().sort(sortWUBRG).join("") || null,
     card.rarity ?? null,
+    // Double-faced cards carry the type line on their faces; the front one is
+    // what is printed on the card you would pull out of a binder.
+    card.type_line ?? card.card_faces?.[0]?.type_line ?? null,
     card.collector_number ?? null,
     card.released_at ? Number(card.released_at.slice(0, 4)) : null,
     // Which finishes this printing exists in: nonfoil / foil / etched.
@@ -174,7 +177,7 @@ function toRow(card, now) {
 const COLUMNS = [
   "scryfallid", "name", "cardsetcode", "cardsetname", "image",
   "borderless", "showcase", "phyrexian", "extendedart", "retroframe",
-  "boxtopper", "color", "rarity", "collectornumber", "releasedatyear",
+  "boxtopper", "color", "rarity", "typeline", "collectornumber", "releasedatyear",
   "finishes", "games",
   "priceusd", "priceusdfoil", "priceusdetched", "priceeur", "pricesupdated",
 ];
