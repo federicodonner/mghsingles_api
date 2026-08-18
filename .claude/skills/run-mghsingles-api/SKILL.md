@@ -625,6 +625,28 @@ unset and every query fails at runtime. Don't use it.
 - **Node 22.x.** `engines` said `16.x` for a long while, which no Prisma this
   project has ever run actually supported — v7 wants 20.19+.
 
+- **A customer's container is never the shop's to delete.** `DELETE /storage/:id`
+  refuses when `playerid` is set, and the list reports `deletable` so the UI does
+  not offer a button the API will reject. Emptying it first does not help: the
+  container is the customer's property, and deleting it would destroy the record
+  of where their cards live with no way for them to object. The shop hands it
+  back instead.
+
+- **The shop can hand a container back in one step.** `for_sale -> released` is
+  a shop move: the customer is standing at the counter, so making them file a
+  retirement request the shop then approves would be theatre. The cards come off
+  sale on the way, since `retired` and `released` both mean "not for sale".
+
+- **`GET /mystorage/unfiled` exists because Contenedores is now the customer's
+  only view of their cards.** A card row can have four copies and three
+  placements; before this the fourth was real, owned and invisible. Registered
+  ahead of `/:storageId`, which validates its parameter as numeric and would
+  otherwise reject "unfiled" as a bad id.
+
+- **`POST /card/:collectionId` returns the card row, not just a message.** The
+  customer's add-card flow creates the card and then files a copy into the
+  container they were looking at, which it cannot do without the id.
+
 - **A container has four states, and only `for_sale` sells.** `storage.state` is
   `for_sale` / `retired` / `released` / `returning`, replacing an `inshop`
   boolean that was purely decorative — a card in a container marked "taken home"

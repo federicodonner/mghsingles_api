@@ -40,6 +40,8 @@ const messages = {
   STORAGE_SHOP_OWNED:
     "Este contenedor es de la tienda, no puede entregarse a un cliente.",
   STORAGE_NOT_YOURS: "Ese contenedor no es tuyo.",
+  STORAGE_CUSTOMER_OWNED:
+    "Este contenedor es de un cliente; devolvéselo en vez de eliminarlo.",
   STORAGE_BAD_STATE: "El contenedor no puede pasar a ese estado desde el actual.",
   STORAGE_NOT_EDITABLE:
     "Sólo podés reordenar un contenedor que ya te fue entregado.",

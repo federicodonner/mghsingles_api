@@ -4,11 +4,12 @@
 //        │ for_sale │ ────────────────────► │ retired │
 //        │          │ ◄──────────────────── │         │  shop cancels
 //        └──────────┘   shop accepts        └─────────┘
-//             ▲                                  │ shop hands it over
-//             │                                  ▼
-//        ┌───────────┐  customer brings it  ┌──────────┐
-//        │ returning │ ◄────────────────────│ released │
-//        └───────────┘                      └──────────┘
+//             ▲  │                               │ shop hands it over
+//             │  │ shop hands it back            ▼
+//             │  └──────────────────────► ┌──────────┐
+//        ┌───────────┐  customer brings it │ released │
+//        │ returning │ ◄───────────────────│          │
+//        └───────────┘                     └──────────┘
 //
 // Retiring takes the cards off sale IMMEDIATELY, before anything moves
 // physically: the customer has said they want it back, so it should stop being
@@ -30,6 +31,12 @@ const CUSTOMER_MOVES = [
   ["released", "returning"], // "I am bringing it in"
 ];
 const SHOP_MOVES = [
+  // Handing a container back across the counter, without the customer having
+  // asked first. The customer is standing there — making them file a request so
+  // the shop can approve it would be theatre. It goes straight to `released`,
+  // and the cards come off sale on the way, since `retired` and `released` both
+  // mean "not for sale" and the container is leaving either way.
+  ["for_sale", "released"],
   ["retired", "released"], // handed over the physical container
   ["retired", "for_sale"], // customer changed their mind before collecting
   ["returning", "for_sale"], // took delivery; cards go back on sale

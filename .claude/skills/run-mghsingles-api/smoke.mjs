@@ -132,6 +132,7 @@ const PROBES = [
   ["/admin/pendingpayments", true],
   ["/storage", true],
   ["/mystorage", true],
+  ["/mystorage/unfiled", true],
   ["/order", true],
   ["/wishlist", true],
   ["/wishlist/covers?cardids=1,2", true],

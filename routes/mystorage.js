@@ -103,6 +103,51 @@ router.get(
   })
 );
 
+// Copies of the customer's cards that are not in any container.
+//
+// Matters because Contenedores is now the only place a customer sees their
+// cards. A card row can have four copies and three placements — the fourth is
+// real, owned and unaccounted for, and before this it was simply invisible.
+//
+// Registered ahead of /:storageId: that route validates its parameter as
+// numeric, so "unfiled" would be rejected as a bad id rather than falling
+// through to here.
+router.get(
+  "/unfiled",
+  asyncHandler(async (req, res) => {
+    const playerId = requirePlayerId(req);
+
+    const cards = await req.prisma.card.findMany({
+      where: { collection: { playerid: playerId } },
+      include: {
+        cardgeneral: true,
+        cardcondition: { select: { name: true } },
+        cardlanguage: { select: { name: true } },
+        _count: { select: { cardplacement: true } },
+      },
+    });
+
+    const unfiled = cards
+      .map((card) => ({
+        cardid: card.id,
+        name: card.cardgeneral?.name ?? null,
+        image: card.cardgeneral?.image ?? null,
+        cardsetcode: card.cardgeneral?.cardsetcode ?? null,
+        cardsetname: card.cardgeneral?.cardsetname ?? null,
+        variant: card.variant,
+        condition: card.cardcondition?.name ?? null,
+        language: card.cardlanguage?.name ?? null,
+        // Every copy is either in a container or it is not; a copy in a pick-up
+        // bag still has its placement, so it is not counted as unfiled.
+        copies: card.quantity - card._count.cardplacement,
+      }))
+      .filter((row) => row.copies > 0)
+      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
+
+    return res.status(200).json(unfiled);
+  })
+);
+
 // Create a container.
 //
 // It starts released: the customer has just made it, it is in their hands, and

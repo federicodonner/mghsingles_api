@@ -484,7 +484,10 @@ router.post(
           data: { quantity: existingCard.quantity + quantity },
         });
 
-        return res.status(200).json({ message: messages.COLLECTION_UPDATED });
+        return res.status(200).json({
+          message: messages.COLLECTION_UPDATED,
+          card: { id: existingCard.id, quantity: existingCard.quantity + quantity },
+        });
       } else {
         // Adds the card to the database
         const newCard = await prisma.card.create({
@@ -498,7 +501,14 @@ router.post(
           },
         });
 
-        return res.status(201).json({ message: messages.COLLECTION_UPDATED });
+        // The id goes back so the caller can act on what it just created —
+        // filing the copy straight into a container, for instance. Returning
+        // only a message meant the customer added a card and then had to go and
+        // find it again.
+        return res.status(201).json({
+          message: messages.COLLECTION_UPDATED,
+          card: { id: newCard.id, quantity: newCard.quantity },
+        });
       }
     } catch (e) {
       console.log(e);

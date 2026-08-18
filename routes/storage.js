@@ -75,9 +75,12 @@ router.get(
         cando: u.playerid === null
           ? []
           : STATES.filter((to) => shopCanMove(u.state, to)),
-        // Whether the shop physically holds it, and so may rename, delete or
+        // Whether the shop physically holds it, and so may rename or
         // rearrange it at all.
         inshop: u.state !== "released",
+        // A customer's container is never the shop's to delete — see the
+        // DELETE route. The UI reads this rather than re-deriving the rule.
+        deletable: u.playerid === null && u.state !== "released",
       }))
     );
   })
@@ -176,8 +179,12 @@ router.delete(
     if (!unit) {
       return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
     }
-    if (unit.state === "released") {
-      return res.status(400).json({ message: messages.STORAGE_WITH_CUSTOMER });
+    // A customer's container is theirs. The shop can hand it back, but deleting
+    // it would destroy the record of where their cards live — and the customer
+    // has no way to object. Emptying it first does not help: the container is
+    // still the customer's property, not the shop's to dispose of.
+    if (unit.playerid !== null) {
+      return res.status(400).json({ message: messages.STORAGE_CUSTOMER_OWNED });
     }
     if (unit._count.cardplacement > 0) {
       return res.status(400).json({
