@@ -120,6 +120,7 @@ const PROBES = [
   ["/store/filters", false],
   ["/store/search?name=a", false],
   ["/card/modifiers", false],
+  ["/card/names?q=bolt", false],
   ["/card/sets", false],
   ["/card/set/lea", false],
   ["/player/me", true],

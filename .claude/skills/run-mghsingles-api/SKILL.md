@@ -490,6 +490,21 @@ unset and every query fails at runtime. Don't use it.
   `services/storageContents.js` are the only place that arithmetic lives; import
   them rather than repeating it.
 
+- **`GET /wishlist` carries no stock.** A wishlist says what a customer wants,
+  not what the shop has — the two are different screens. The payload is the
+  entry plus its constraints plus `availableFinishes`, which the editor needs so
+  it cannot offer "foil" for a card with no foil printing. Dropping the stock
+  side removed a card scan, two groupBy queries and an expiry sweep from every
+  load. `/admin/wishlist` still reports coverage; that is the shop's view.
+
+- **`GET /card/names?q=` feeds the autocomplete.** Distinct NAMES, not printings
+  — the twelve printings of Lightning Bolt are one suggestion. It searches the
+  CATALOGUE, not stock, because wanting a card the shop does not have is the
+  point of a wishlist. Prefix matches are fetched as their own query rather than
+  sorted afterwards: `take` runs in SQL, so ranking a single query's results
+  in JS returned the first fifteen alphabetical matches for "lightn" (Arc
+  Lightning, Ball Lightning…) and Lightning Bolt was never among them.
+
 - **`/store` is public and searches STOCK; `/admin/cards/search` is staff-only.**
   The storefront never lists the card game — only what the shop has, filtered to
   `available > 0`, so a shopper cannot click into emptiness. `GET /store/search`

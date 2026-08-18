@@ -232,6 +232,67 @@ router.get(
   })
 );
 
+// Card names matching what has been typed, for an autocomplete field.
+//
+// Distinct NAMES, not printings: a wishlist entry is a name, and the twelve
+// printings of Lightning Bolt are one suggestion, not twelve.
+//
+// Suggestions come from the CATALOGUE, not from stock. A wishlist exists
+// precisely for cards the shop does not have — suggesting only what is on the
+// shelf would make it impossible to ask for the thing you actually want.
+// Paper-only still applies: no point wishing for a card that cannot be printed.
+router.get(
+  "/names",
+  [check("q").trim().isLength({ min: 2 })],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      // Too short to be worth answering — an empty list, not an error, so the
+      // field simply shows nothing until there is enough to go on.
+      return res.status(200).json([]);
+    }
+    const q = String(req.query.q).trim();
+
+    const LIMIT = 15;
+
+    // A name that STARTS with what was typed is almost always the one meant, so
+    // those are fetched as their own query rather than being sorted out of a
+    // single one afterwards. Sorting after the fact does not work: `take` runs
+    // in SQL, so "lightn" came back with the first fifteen alphabetical matches
+    // — Arc Lightning, Ball Lightning, Barbed Lightning — and Lightning Bolt
+    // was never among them to be promoted.
+    const select = { name: true };
+    const [starts, contains] = await Promise.all([
+      req.prisma.cardgeneral.findMany({
+        where: { name: { startsWith: q, mode: "insensitive" }, ...PAPER_ONLY },
+        select,
+        distinct: ["name"],
+        orderBy: { name: "asc" },
+        take: LIMIT,
+      }),
+      req.prisma.cardgeneral.findMany({
+        where: { name: { contains: q, mode: "insensitive" }, ...PAPER_ONLY },
+        select,
+        distinct: ["name"],
+        orderBy: { name: "asc" },
+        take: LIMIT,
+      }),
+    ]);
+
+    const seen = new Set();
+    const names = [];
+    for (const row of [...starts, ...contains]) {
+      const key = row.name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      names.push(row.name);
+      if (names.length >= LIMIT) break;
+    }
+
+    return res.status(200).json(names);
+  })
+);
+
 // Returns all the cards in a specific set
 router.get("/set/:setId", [check("setId").escape()], asyncHandler(async (req, res) => {
   // Loads the data into a variable

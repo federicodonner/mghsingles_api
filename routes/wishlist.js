@@ -19,8 +19,6 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
-import { releaseExpiredOrders } from "../services/orders.js";
-import { availabilityFor, availableOf } from "../services/availability.js";
 
 // Normalise a constraint list from the request: unique, right type, and an
 // empty list always meaning "any".
@@ -62,57 +60,24 @@ function matches(entry, card) {
   return true;
 }
 
-function describeCard(card, available) {
-  return {
-    cardid: card.id,
-    available,
-    price: card.price,
-    variant: card.variant,
-    scryfallid: card.scryfallid,
-    name: card.cardgeneral?.name ?? null,
-    cardsetcode: card.cardgeneral?.cardsetcode ?? null,
-    cardsetname: card.cardgeneral?.cardsetname ?? null,
-    image: card.cardgeneral?.image ?? null,
-    condition: card.cardcondition?.name ?? null,
-    language: card.cardlanguage?.name ?? null,
-  };
-}
-
-// For each entry, the on-sale cards that satisfy its constraints.
-async function attachAvailability(prisma, entries) {
+// Decorate entries with the finishes their card actually exists in.
+//
+// This used to also compute what was in stock for each entry, which the
+// wishlist no longer shows: a wishlist is a statement of what you want, not a
+// storefront, and mixing "here is what we have" into it made the two jobs one
+// screen. Dropping it also removed a card scan, two groupBy queries and an
+// expiry sweep from every load of this page.
+//
+// `availableFinishes` stays because the editor needs it — without it the finish
+// filter would offer "foil" for a card that has never been printed in foil.
+async function attachFinishes(prisma, entries) {
   if (!entries.length) return [];
 
-  // One query for every wishlisted name, then filter per entry in memory —
-  // constraints differ per entry, so this cannot be pushed into one WHERE.
-  const cards = await prisma.card.findMany({
-    where: {
-      collection: { active: true },
-      cardgeneral: {
-        name: { in: entries.map((e) => e.name), mode: "insensitive" },
-      },
-    },
-    include: {
-      cardgeneral: true,
-      cardcondition: { select: { name: true } },
-      cardlanguage: { select: { name: true } },
-    },
-  });
-
-  const { reserved, offSale } = await availabilityFor(prisma, cards);
-
-  const byName = new Map();
-  for (const card of cards) {
-    const key = (card.cardgeneral?.name ?? "").toLowerCase();
-    if (!byName.has(key)) byName.set(key, []);
-    byName.get(key).push(card);
-  }
-
-  // Which finishes this card exists in AT ALL, across every printing — so the
-  // editor never offers "foil" for a card that has no foil printing.
   const printings = await prisma.cardgeneral.findMany({
     where: { name: { in: entries.map((e) => e.name), mode: "insensitive" } },
     select: { name: true, finishes: true },
   });
+
   const finishesByName = new Map();
   for (const printing of printings) {
     const key = printing.name.toLowerCase();
@@ -125,32 +90,18 @@ async function attachAvailability(prisma, entries) {
     }
   }
 
-  return entries.map((entry) => {
-    const candidates = byName.get(entry.name.toLowerCase()) ?? [];
-    const inStock = [];
-    // Cards that share the name but fail a constraint are reported separately,
-    // so the customer can see the shop has one and understand why it does not
-    // count — otherwise a filtered entry looks identical to no stock at all.
-    let excluded = 0;
-    for (const card of candidates) {
-      const available = availableOf(card, reserved, offSale);
-      if (available <= 0) continue;
-      if (matches(entry, card)) inStock.push(describeCard(card, available));
-      else excluded++;
-    }
-    return {
-      id: entry.id,
-      name: entry.name,
-      created: entry.created,
-      versions: entry.versions,
-      languageids: entry.languageids,
-      conditionids: entry.conditionids,
-      variants: entry.variants,
-      availableFinishes: [...(finishesByName.get(entry.name.toLowerCase()) ?? [])],
-      inStock,
-      excluded,
-    };
-  });
+  return entries.map((entry) => ({
+    id: entry.id,
+    name: entry.name,
+    created: entry.created,
+    versions: entry.versions,
+    languageids: entry.languageids,
+    conditionids: entry.conditionids,
+    variants: entry.variants,
+    availableFinishes: [
+      ...(finishesByName.get(entry.name.toLowerCase()) ?? []),
+    ],
+  }));
 }
 
 // The customer's wishlist, each entry saying what satisfies it right now.
@@ -160,15 +111,12 @@ router.get(
     const playerId = requirePlayerId(req);
     const prisma = req.prisma;
 
-    // Availability below must not count stock held by dead reservations.
-    await releaseExpiredOrders(prisma);
-
     const entries = await prisma.wishlist.findMany({
       where: { playerid: playerId },
       orderBy: { name: "asc" },
     });
 
-    return res.status(200).json(await attachAvailability(prisma, entries));
+    return res.status(200).json(await attachFinishes(prisma, entries));
   })
 );
 
