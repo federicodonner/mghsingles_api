@@ -415,6 +415,9 @@ async function makeWishlists(people) {
     { who: "diego", name: "Sol Ring", variants: ["foil"] },
     // Several alternatives in one category.
     { who: "diego", name: "Brainstorm", languageids: [1, 2] },
+    // Wanting more than one, so the shop's queue has a multi-copy wish to fill
+    // and the entry survives the first set-aside.
+    { who: "martin", name: "Lightning Bolt", quantity: 3 },
     // A card Ana already has consigned — should surface as a withdrawal, not a
     // purchase: she can just take it back, and nobody pays anybody.
     { who: "ana", name: null, ownStock: true },
@@ -438,6 +441,7 @@ async function makeWishlists(people) {
         playerid: people[entry.who].player.id,
         name,
         created: now - pickInt(1, 20) * DAY,
+        quantity: entry.quantity ?? 1,
         versions: entry.versions ?? [],
         languageids: entry.languageids ?? [],
         conditionids: entry.conditionids ?? [],

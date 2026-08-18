@@ -592,6 +592,29 @@ router.get(
   asyncHandler(async (req, res) => {
     const prisma = req.prisma;
 
+    // How many copies of each wished-for card are already in that customer's
+    // bag, so the queue can say "wants 3, one already set aside" rather than
+    // leaving the shop to count.
+    const baggedByPlayerAndName = new Map();
+    {
+      const lines = await prisma.orderline.findMany({
+        where: { order: { status: "pending" } },
+        include: {
+          order: { select: { playerid: true } },
+          card: { include: { cardgeneral: { select: { name: true } } } },
+        },
+      });
+      for (const line of lines) {
+        const key = `${line.order.playerid}:${(
+          line.card?.cardgeneral?.name ?? ""
+        ).toLowerCase()}`;
+        baggedByPlayerAndName.set(
+          key,
+          (baggedByPlayerAndName.get(key) ?? 0) + line.quantity
+        );
+      }
+    }
+
     const found = await prisma.wishlistmatch.findMany({
       where: { resolved: null },
       include: {
@@ -630,6 +653,12 @@ router.get(
         found: match.found,
         wishlistid: match.wishlistid,
         wanted: match.wishlist?.name ?? null,
+        // How many they asked for, and how many are already put by.
+        wantedQuantity: match.wishlist?.quantity ?? 1,
+        baggedQuantity:
+          baggedByPlayerAndName.get(
+            `${match.playerid}:${(match.wishlist?.name ?? "").toLowerCase()}`
+          ) ?? 0,
         cardid: match.cardid,
         name: match.card?.cardgeneral?.name ?? null,
         cardsetcode: match.card?.cardgeneral?.cardsetcode ?? null,
@@ -762,13 +791,33 @@ router.post(
         });
       }
 
-      // The wish has been answered.
-      await tx.wishlist.delete({ where: { id: match.wishlistid } });
+      // The wish is answered only once enough copies are in the bag.
+      //
+      // Setting one aside used to delete the entry outright, which was right
+      // while every wish was for a single copy. A customer wanting three would
+      // otherwise lose the entry after the first, and the remaining two would
+      // never be looked for again.
+      const wish = await tx.wishlist.findUnique({
+        where: { id: match.wishlistid },
+      });
+      const bagged = await tx.orderline.aggregate({
+        where: {
+          orderid: bag.id,
+          card: { cardgeneral: { name: { equals: wish.name, mode: "insensitive" } } },
+        },
+        _sum: { quantity: true },
+      });
+      const answered = (bagged._sum.quantity ?? 0) >= wish.quantity;
+      if (answered) {
+        await tx.wishlist.delete({ where: { id: match.wishlistid } });
+      }
 
-      // Tell the customer. Fired here rather than when the match was found:
-      // until the card is actually pulled it could still be sold at the
-      // counter, and promising it first would be a lie some of the time.
-      await tx.notification.create({
+      // Tell the customer, once the wish is complete. Fired here rather than
+      // when the match was found: until the card is actually pulled it could
+      // still be sold at the counter, and promising it first would be a lie
+      // some of the time. Held back until the last copy so somebody wanting
+      // three is not told "ready" three times.
+      if (answered) await tx.notification.create({
         data: {
           playerid: match.playerid,
           kind:

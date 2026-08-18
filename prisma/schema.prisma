@@ -336,6 +336,13 @@ model wishlist {
   playerid Int
   name     String
   created  Int
+  /// How many copies the customer wants, 1-4.
+  ///
+  /// Read by the shop: the match queue says how many to set aside, and setting
+  /// one aside is already an incremental action, so a customer wanting three
+  /// is three clicks rather than a special case. Capped at 4 because that is
+  /// the deck limit — wanting more is a different conversation than a wishlist.
+  quantity Int    @default(1)
   /// Constraints, each independent of the others. An EMPTY list means "any" —
   /// so a customer can pin the printing while accepting any language, or accept
   /// any printing in only English or Spanish, foil only. Several values in one

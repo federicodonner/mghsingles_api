@@ -497,6 +497,20 @@ unset and every query fails at runtime. Don't use it.
   side removed a card scan, two groupBy queries and an expiry sweep from every
   load. `/admin/wishlist` still reports coverage; that is the shop's view.
 
+- **A wishlist entry has a `quantity`, 1-4, and set-aside honours it.** Setting
+  one copy aside used to delete the entry outright, which was right while every
+  wish was for a single copy — a customer wanting three would have lost the
+  entry after the first and the other two would never have been looked for
+  again. The entry is now deleted only once enough copies are in that
+  customer's bag, and the "ready" notification fires with the last one rather
+  than on every copy. `/admin/match` reports `wantedQuantity` and
+  `baggedQuantity` so the queue can say how many more to pull.
+
+- **After `prisma db push`, regenerate AND restart the API.** This has bitten
+  twice: `db push` updates the database, but a running node process holds the
+  client it started with, so a new column reads as an unknown field and every
+  write to it 500s. `./node_modules/.bin/prisma generate`, then restart.
+
 - **Wishlisting from the storefront pins the exact copy.** Everything on that
   page is in stock, so the next matcher run sets the card aside within minutes —
   an entry that named only the card would let the shop bag any other printing it

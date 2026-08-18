@@ -94,6 +94,7 @@ async function attachFinishes(prisma, entries) {
     id: entry.id,
     name: entry.name,
     created: entry.created,
+    quantity: entry.quantity,
     versions: entry.versions,
     languageids: entry.languageids,
     conditionids: entry.conditionids,
@@ -210,6 +211,17 @@ router.get(
   })
 );
 
+// How many copies an entry may ask for. 4 is the deck limit; wanting more of a
+// single card is a conversation with the shop, not a wishlist row.
+const MIN_WANTED = 1;
+const MAX_WANTED = 4;
+
+function readQuantity(value, fallback = MIN_WANTED) {
+  const n = parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(MAX_WANTED, Math.max(MIN_WANTED, n));
+}
+
 // Merge two constraint lists.
 //
 // An EMPTY list means "any", so it is not a neutral element: unioning [X] into
@@ -264,6 +276,11 @@ router.post(
       const merged = await prisma.wishlist.update({
         where: { id: existing.id },
         data: {
+          // Asking again never reduces what you asked for.
+          quantity: Math.max(
+            existing.quantity,
+            readQuantity(req.body.quantity, existing.quantity)
+          ),
           versions: union(existing.versions, readStrings(req.body.versions)),
           languageids: union(existing.languageids, readIds(req.body.languageids)),
           conditionids: union(existing.conditionids, readIds(req.body.conditionids)),
@@ -278,6 +295,7 @@ router.post(
         playerid: playerId,
         name: known.name,
         created: Math.round(Date.now() / 1000),
+        quantity: readQuantity(req.body.quantity),
         versions: readStrings(req.body.versions),
         languageids: readIds(req.body.languageids),
         conditionids: readIds(req.body.conditionids),
@@ -325,6 +343,9 @@ router.put(
     }
     if (req.body.variants !== undefined) {
       data.variants = readStrings(req.body.variants);
+    }
+    if (req.body.quantity !== undefined) {
+      data.quantity = readQuantity(req.body.quantity, entry.quantity);
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
