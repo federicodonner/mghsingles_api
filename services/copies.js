@@ -16,7 +16,7 @@
 // when the order completes and the card physically leaves the shop.
 import messages from "../data/messages.js";
 import { ContentsError } from "./storageContents.js";
-import { applyFixedPrice } from "./pricing.js";
+import { applyFixedPrice, applyReferencePrices } from "./pricing.js";
 
 // Where a copy sits while its owner decides — a binder placement with no page
 // and no pocket.
@@ -191,9 +191,13 @@ export async function addPrintingCopy(
           },
         });
 
-    // A printing fixed while out of stock prices its first arriving copy the
-    // moment it exists, not at the next nightly run.
-    if (!existing) await applyFixedPrice(tx, card);
+    // Price the row the moment it exists, not at the next nightly run: a
+    // pinned printing gets its fixed price, everything else the stored
+    // CardKingdom reference.
+    if (!existing) {
+      await applyFixedPrice(tx, card);
+      await applyReferencePrices(tx, { onlyCardIds: [card.id] });
+    }
 
     const highest = await tx.cardplacement.aggregate({
       where: { cardid: card.id },

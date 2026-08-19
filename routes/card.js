@@ -8,7 +8,7 @@ import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
 import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import { applyFixedPrice } from "../services/pricing.js";
+import { applyFixedPrice, applyReferencePrices } from "../services/pricing.js";
 import {
   PAPER_ONLY,
   PAPER_SETS_ONLY,
@@ -574,9 +574,12 @@ router.post(
           },
         });
 
-        // A printing fixed while out of stock prices its first arriving copy
-        // the moment it exists, not at the next nightly run.
+        // Price the row the moment it exists, not at the next nightly run: a
+        // pinned printing gets its fixed price, everything else gets the
+        // stored CardKingdom reference — a card added today should not sit
+        // priceless on the shelf until tomorrow's import.
         await applyFixedPrice(prisma, newCard);
+        await applyReferencePrices(prisma, { onlyCardIds: [newCard.id] });
 
         // The id goes back so the caller can act on what it just created —
         // filing the copy straight into a container, for instance. Returning
