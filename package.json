@@ -8,6 +8,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "start-dev": "nodemon -r dotenv/config",
     "start": "node -r dotenv/config app.js",
+    "build": "prisma generate",
     "sync:scryfall": "node -r dotenv/config scripts/syncScryfall.mjs",
     "match:wishlists": "node -r dotenv/config scripts/matchWishlists.mjs",
     "sync:prices": "node -r dotenv/config scripts/syncPrices.mjs",
