@@ -623,7 +623,9 @@ router.post(
       // page's refile panel until somebody has physically put them back, and
       // the where-clause needs the link that refileOrder is about to clear.
       await tx.cardplacement.updateMany({
-        where: { orderline: { orderid: id } },
+        // Only copies somebody physically took out; an unpulled reservation
+        // never left its pocket.
+        where: { orderline: { orderid: id }, pulled: true },
         data: { needsrefile: true },
       });
       await refileOrder(tx, id);
@@ -820,13 +822,92 @@ router.post(
       if (wanted) {
         await tx.cardplacement.update({
           where: { id: wanted.id },
-          data: { orderlineid: lineId },
+          // The till rings up a card the person is holding, so it is pulled
+          // by definition.
+          data: { orderlineid: lineId, pulled: true },
         });
       }
     });
 
     const bag = await openCounterBag(prisma);
     return res.status(201).json(describeOrder(bag));
+  })
+);
+
+// ---------------------------------------------------------------------------
+// The pull queue: copies reserved into a customer's bag that nobody has
+// physically taken out of their container yet. A storefront buy bags the copy
+// instantly — the reservation is real from that second — but the card is
+// still sitting in its pocket, and this list is what sends a person to get it.
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/pulls",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    await releaseExpiredOrders(prisma);
+
+    const placements = await prisma.cardplacement.findMany({
+      where: {
+        orderlineid: { not: null },
+        pulled: false,
+        orderline: { order: { status: "pending" } },
+      },
+      include: {
+        storage: { select: { id: true, name: true, type: true } },
+        card: {
+          include: {
+            cardgeneral: { select: { name: true, cardsetcode: true } },
+          },
+        },
+        orderline: {
+          include: {
+            order: {
+              select: { id: true, player: { select: { name: true } } },
+            },
+          },
+        },
+      },
+      orderBy: [{ storageid: "asc" }, { page: "asc" }, { sequence: "asc" }],
+    });
+
+    return res.status(200).json(
+      placements.map((pl) => ({
+        placementid: pl.id,
+        cardid: pl.cardid,
+        name: pl.card?.cardgeneral?.name ?? null,
+        cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
+        // Whose bag it goes into — the counter's, when nobody is behind it.
+        customer: pl.orderline?.order?.player?.name ?? null,
+        storageid: pl.storage?.id ?? null,
+        storagename: pl.storage?.name ?? null,
+        storagetype: pl.storage?.type ?? null,
+        page: pl.page,
+        pocket: pl.pocket,
+        depth: pl.depth,
+        sequence: pl.sequence,
+      }))
+    );
+  })
+);
+
+// The cards listed are physically in their customers' bags now.
+router.post(
+  "/pulls/done",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const ids = Array.isArray(req.body.placementids)
+      ? req.body.placementids.map((v) => parseInt(v, 10)).filter(Number.isInteger)
+      : [];
+    if (!ids.length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    await prisma.cardplacement.updateMany({
+      // Guarded on the link so a stray id cannot mark a shelved copy pulled.
+      where: { id: { in: ids }, orderlineid: { not: null }, pulled: false },
+      data: { pulled: true },
+    });
+    return res.status(200).json({ message: messages.PULLS_DONE });
   })
 );
 
@@ -1156,8 +1237,9 @@ router.post(
 
     try {
       // The caller may name the copy they actually took; otherwise the first
-      // not already in a bag is taken.
-      await setAsideMatch(prisma, id, req.body.placementid);
+      // not already in a bag is taken. Working the queue means the card is in
+      // somebody's hand right now, so it is pulled by definition.
+      await setAsideMatch(prisma, id, req.body.placementid, { pulled: true });
     } catch (err) {
       if (err instanceof MatchError) {
         return res.status(err.status).json({ message: err.message });

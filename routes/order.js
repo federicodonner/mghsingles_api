@@ -202,7 +202,13 @@ router.delete(
     }
 
     await prisma.$transaction(async (tx) => {
-      // Anything the shop had set aside goes back to its pocket.
+      // Copies somebody physically pulled are sitting in a bag on the counter
+      // and land on the shop's refile panel; ones never taken out never left
+      // their pocket, so unlinking them is the whole job.
+      await tx.cardplacement.updateMany({
+        where: { orderline: { orderid: id }, pulled: true },
+        data: { needsrefile: true },
+      });
       await refileOrder(tx, id);
       await tx.order.update({
         where: { id },

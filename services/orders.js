@@ -35,11 +35,20 @@ export async function releaseExpiredOrders(prisma) {
     select: { id: true },
   });
   if (lapsing.length) {
+    // Only copies somebody physically took out need putting back; one that
+    // was reserved but never pulled never left its pocket.
     await prisma.cardplacement.updateMany({
-      where: { orderline: { orderid: { in: lapsing.map((o) => o.id) } } },
+      where: {
+        orderline: { orderid: { in: lapsing.map((o) => o.id) } },
+        pulled: true,
+      },
       // Flagged for the home page's refile panel: the copies are physically in
       // a lapsed bag on the counter until somebody puts them back.
-      data: { orderlineid: null, needsrefile: true },
+      data: { needsrefile: true },
+    });
+    await prisma.cardplacement.updateMany({
+      where: { orderline: { orderid: { in: lapsing.map((o) => o.id) } } },
+      data: { orderlineid: null, pulled: false },
     });
   }
 
@@ -72,15 +81,18 @@ export {
 export async function refileOrder(tx, orderId) {
   const { count } = await tx.cardplacement.updateMany({
     where: { orderline: { orderid: orderId } },
-    data: { orderlineid: null },
+    data: { orderlineid: null, pulled: false },
   });
   return count;
 }
 
-// Where each card in an order belongs, for the shop to put them back.
+// Where each card in an order belongs, for the shop to put them back. Only
+// PULLED copies: one that was reserved but never taken out is still sitting
+// exactly where its coordinates say, and listing it would send somebody to
+// re-file a card that never moved.
 export async function refileInstructions(prisma, orderId) {
   const placements = await prisma.cardplacement.findMany({
-    where: { orderline: { orderid: orderId } },
+    where: { orderline: { orderid: orderId }, pulled: true },
     include: {
       storage: { select: { id: true, name: true, type: true } },
       card: { include: { cardgeneral: { select: { name: true, cardsetcode: true } } } },

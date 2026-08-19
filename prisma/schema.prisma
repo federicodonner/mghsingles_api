@@ -281,9 +281,17 @@ model cardplacement {
   /// exclude these — but the address survives until the order is fulfilled,
   /// at which point the card has left the shop and the row goes with it.
   orderlineid Int?
+  /// Whether somebody has PHYSICALLY taken this bagged copy out of its
+  /// container. A storefront buy reserves and bags the copy instantly, but the
+  /// card is still sitting in its pocket until a person walks over — the home
+  /// page's pull queue lists bagged, unpulled copies with their coordinates.
+  /// Flows where staff already hold the card (the till, setting a match
+  /// aside) mark it pulled on the spot. Meaningless while orderlineid is null.
+  pulled      Boolean @default(false)
   /// Set when this copy came back out of a cancelled or expired bag and is
   /// physically waiting to be put back where the coordinates say. Cleared by
   /// the shop from the refile panel once the card is actually in its pocket.
+  /// Only a PULLED copy ever needs this — one never taken out never left.
   needsrefile Boolean @default(false)
   card      card    @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cardplacement_card")
   storage   storage @relation(fields: [storageid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cardplacement_storage")

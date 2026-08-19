@@ -119,8 +119,12 @@ const MATCH_INCLUDE = {
 // Put one copy for this match into the customer's bag.
 //
 // `placementid` optionally names the exact copy the shop pulled; otherwise the
-// first copy not already in a bag is taken.
-export async function setAsideMatch(prisma, matchId, placementid) {
+// first copy not already in a bag is taken. `pulled` says whether a person is
+// physically holding the card right now: true when the shop works the match
+// queue (they just fetched it), false for a storefront buy — the copy is
+// reserved instantly but still sits in its pocket, and the home page's pull
+// queue is what sends somebody to get it.
+export async function setAsideMatch(prisma, matchId, placementid, { pulled = false } = {}) {
   const match = await prisma.wishlistmatch.findUnique({
     where: { id: matchId },
     include: MATCH_INCLUDE,
@@ -217,7 +221,7 @@ export async function setAsideMatch(prisma, matchId, placementid) {
     if (wanted) {
       await tx.cardplacement.update({
         where: { id: wanted.id },
-        data: { orderlineid: lineId },
+        data: { orderlineid: lineId, pulled },
       });
     }
 

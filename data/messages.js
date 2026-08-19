@@ -88,6 +88,7 @@ const messages = {
   CARD_WRONG_CONTAINER:
     "Una carta sólo puede guardarse en un contenedor de su dueño.",
   REFILE_CLEARED: "Listo, cartas devueltas a su lugar.",
+  PULLS_DONE: "Listo, cartas en sus bolsas.",
   PIN_REMOVED: "El precio vuelve a seguir al mercado.",
   PAYMENT_DONE: "Pago registrado.",
   CREDIT_NOT_YOURS: "Este pedido no tiene un cliente al que aplicarle crédito.",
