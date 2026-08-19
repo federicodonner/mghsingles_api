@@ -8,6 +8,7 @@ import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
 import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
+import { applyFixedPrice } from "../services/pricing.js";
 import {
   PAPER_ONLY,
   PAPER_SETS_ONLY,
@@ -198,7 +199,17 @@ async function getSingleCardPrice(card) {
 
 // --------------------------------
 // --------------------------------
-// Returns all the versions of a specific card name
+// Returns the versions of a specific card name.
+//
+// With `limit` in the query the answer is one page — `{ cards, total, offset }`
+// — because a basic land has more printings than anybody should be sent at
+// once; the picker walks pages instead. Without `limit` the old contract holds
+// (everything, refused past 800) so existing callers keep working.
+//
+// `exact=1` matches the name exactly rather than by substring: a picker fed by
+// the autocomplete has the exact name, and "Fog" by substring drags in Aven
+// Fogbringer and friends. `set=` narrows to printings whose set name or code
+// contains the text, for filtering as the user types.
 router.get(
   "/versions/:cardName",
   [check("cardName").escape()],
@@ -214,11 +225,39 @@ router.get(
     // Gets prisma from middleware
     const prisma = req.prisma;
 
+    const where = {
+      name:
+        req.query.exact === "1"
+          ? { equals: cardName, mode: "insensitive" }
+          : { contains: cardName, mode: "insensitive" },
+      ...PAPER_ONLY,
+    };
+    const setFilter = String(req.query.set ?? "").trim();
+    if (setFilter) {
+      where.OR = [
+        { cardsetname: { contains: setFilter, mode: "insensitive" } },
+        { cardsetcode: { contains: setFilter, mode: "insensitive" } },
+      ];
+    }
+    const orderBy = [{ name: "asc" }, { cardsetcode: "asc" }];
+
+    const limit = parseInt(req.query.limit, 10);
+    if (Number.isFinite(limit) && limit > 0) {
+      const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+      const [cards, total] = await Promise.all([
+        prisma.cardgeneral.findMany({
+          where,
+          orderBy,
+          skip: offset,
+          take: Math.min(limit, 200),
+        }),
+        prisma.cardgeneral.count({ where }),
+      ]);
+      return res.status(200).json({ cards, total, offset });
+    }
+
     // Finds the card in the database
-    const cards = await prisma.cardgeneral.findMany({
-      where: { name: { contains: cardName, mode: "insensitive" }, ...PAPER_ONLY },
-      orderBy: [{ name: "asc" }, { cardsetcode: "asc" }],
-    });
+    const cards = await prisma.cardgeneral.findMany({ where, orderBy });
 
     if (!cards) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
@@ -241,6 +280,14 @@ router.get(
 // precisely for cards the shop does not have — suggesting only what is on the
 // shelf would make it impossible to ask for the thing you actually want.
 // Paper-only still applies: no point wishing for a card that cannot be printed.
+//
+// `stock=1` flips that around for the till: Vender can only sell what the
+// store holds, so there it suggests only names with at least one approved copy
+// filed in a for-sale container and not sitting in a pick-up bag — the same
+// copies the off-sale subtraction in services/availability.js would count as
+// sellable. Not exact availability (a copy reserved online but not yet pulled
+// still suggests its name), but a name whose every copy is bagged or in a
+// retired/released/returning container stays out of the list.
 router.get(
   "/names",
   [check("q").trim().isLength({ min: 2 })],
@@ -253,6 +300,24 @@ router.get(
     }
     const q = String(req.query.q).trim();
 
+    const IN_STOCK =
+      req.query.stock === "1"
+        ? {
+            card: {
+              some: {
+                approved: true,
+                collection: { active: true },
+                cardplacement: {
+                  some: {
+                    orderlineid: null,
+                    storage: { state: "for_sale" },
+                  },
+                },
+              },
+            },
+          }
+        : {};
+
     const LIMIT = 15;
 
     // A name that STARTS with what was typed is almost always the one meant, so
@@ -264,14 +329,22 @@ router.get(
     const select = { name: true };
     const [starts, contains] = await Promise.all([
       req.prisma.cardgeneral.findMany({
-        where: { name: { startsWith: q, mode: "insensitive" }, ...PAPER_ONLY },
+        where: {
+          name: { startsWith: q, mode: "insensitive" },
+          ...PAPER_ONLY,
+          ...IN_STOCK,
+        },
         select,
         distinct: ["name"],
         orderBy: { name: "asc" },
         take: LIMIT,
       }),
       req.prisma.cardgeneral.findMany({
-        where: { name: { contains: q, mode: "insensitive" }, ...PAPER_ONLY },
+        where: {
+          name: { contains: q, mode: "insensitive" },
+          ...PAPER_ONLY,
+          ...IN_STOCK,
+        },
         select,
         distinct: ["name"],
         orderBy: { name: "asc" },
@@ -500,6 +573,10 @@ router.post(
             variant,
           },
         });
+
+        // A printing fixed while out of stock prices its first arriving copy
+        // the moment it exists, not at the next nightly run.
+        await applyFixedPrice(prisma, newCard);
 
         // The id goes back so the caller can act on what it just created —
         // filing the copy straight into a container, for instance. Returning

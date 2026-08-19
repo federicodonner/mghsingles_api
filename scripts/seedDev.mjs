@@ -242,13 +242,22 @@ async function makeStorage(people) {
 
     // Sofía is on her way to the shop with hers.
     sofiaReturning: await mk("Caja de Sofía", "unsorted_box", "sofia", "returning"),
+
+    // Diego consigns through his own containers — a customer's card is never
+    // filed into anyone else's, so every consignor needs at least one. The
+    // sorted box also gives the match queue a "Posición N" location to show.
+    diegoBinder: await mk("Carpeta de Diego", "binder", "diego", "for_sale"),
+    diegoBox: await mk("Caja de Diego", "sorted_box", "diego", "for_sale"),
   };
-  log(`${Object.keys(units).length} containers: 3 shop, 5 consigned, all four states`);
+  log(`${Object.keys(units).length} containers: 3 shop, 7 consigned, all four states`);
   return units;
 }
 
-// File every copy of every card into a container. A copy belongs in a container
-// owned by the same person as the card, or in one of the shop's.
+// File every copy of every card into a container. A copy goes ONLY into a
+// container owned by the same person as the card — the shop's furniture holds
+// the shop's own stock (fede's, as owner) and nobody else's. The shop sells a
+// customer's cards out of THAT customer's binder on its shelf; it never
+// refiles them into its own.
 async function fileStock(people, units) {
   const cards = await prisma.card.findMany({
     include: { collection: { select: { playerid: true } } },
@@ -259,7 +268,7 @@ async function fileStock(people, units) {
     [people.ana.player.id, [units.anaBinder, units.anaBox]],
     [people.martin.player.id, [units.martinRetired, units.martinHome]],
     [people.sofia.player.id, [units.sofiaReturning]],
-    [people.diego.player.id, [units.vitrina, units.commons]],
+    [people.diego.player.id, [units.diegoBinder, units.diegoBox]],
     [people.fede.player.id, [units.vitrina, units.ordenada, units.commons]],
   ]);
 
@@ -341,7 +350,6 @@ async function makeOrders(people) {
       playerid: people.sofia.player.id,
       status: "pending",
       created: now - 2 * 3600,
-      note: "Paso el sábado por la tarde.",
       orderline: {
         create: forSofia.map((c) => ({
           cardid: c.id,
@@ -390,7 +398,6 @@ async function makeOrders(people) {
       status: "cancelled",
       created: now - 5 * DAY,
       closed: now - 4 * DAY,
-      note: "No pudo pasar.",
       orderline: {
         create: forAna.map((c) => ({ cardid: c.id, quantity: 1, price: c.price ?? "1.00" })),
       },

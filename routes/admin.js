@@ -11,6 +11,13 @@ import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import { owner } from "../middleware/authentication.js";
 import recordSale, { recordWithdrawal } from "../services/sales.js";
+import {
+  saleNet,
+  saleRemaining,
+  creditFor,
+  consumeCredit,
+  ZERO as CREDIT_ZERO,
+} from "../services/credit.js";
 import { applyReferencePrices } from "../services/pricing.js";
 import {
   describeLocation,
@@ -19,6 +26,7 @@ import {
 } from "../services/locations.js";
 import { matches as matchesWishlist } from "./wishlist.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
+import { setAsideMatch, MatchError } from "../services/matches.js";
 import {
   releaseExpiredOrders,
   refileOrder,
@@ -27,44 +35,179 @@ import {
   expiryFromNow,
 } from "../services/orders.js";
 
-// Creates a payment
-router.post(
-  "/payment",
-  [owner, check("collectionId").isNumeric(), check("ammount").isFloat({ gt: 0 })],
+// Every consignor's money position, grouped by person — what the Pagar page
+// shows. Everyone who ever sold a card or received a payment appears, debt or
+// not: a settled account still answers "when did I pay them last". Owed cards
+// carry their remaining net so the page can offer exact amounts; a partial
+// remainder (credit consumption landed mid-sale) shows as such rather than
+// pretending the card is either state.
+router.get(
+  "/payment/owed",
+  [owner],
   asyncHandler(async (req, res) => {
-    // Validates that the parameters are correct
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      // If one of them isn't, returns an error
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-    // Get the body content
-    const collectionId = parseInt(req.body.collectionId, 10);
-    const ammount = Number(req.body.ammount);
-
-    // Gets prisma from middleware
     const prisma = req.prisma;
 
-    // Verifies that the collection exists
-    const collection = await prisma.collection.findUnique({
-      where: { id: collectionId },
-    });
-    // If there are no results, return error
-    if (!collection) {
-      return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+    // Customers only. Owner and staff collections ARE the shop's stock (see
+    // assertOwnerMayHold), so their sales are the store selling its own cards
+    // — listing them here would show the store owing itself.
+    const CONSIGNORS_ONLY = { collection: { player: { role: "customer" } } };
+
+    const [sales, history] = await Promise.all([
+      prisma.sale.findMany({
+        where: CONSIGNORS_ONLY,
+        include: {
+          cardgeneral: {
+            select: { name: true, image: true, cardsetcode: true, cardsetname: true },
+          },
+          collection: {
+            select: { id: true, player: { select: { id: true, name: true } } },
+          },
+        },
+        orderBy: [{ date: "asc" }, { id: "asc" }],
+      }),
+      prisma.payment.findMany({
+        where: CONSIGNORS_ONLY,
+        include: {
+          collection: {
+            select: { id: true, player: { select: { id: true, name: true } } },
+          },
+        },
+        orderBy: [{ date: "desc" }, { id: "desc" }],
+      }),
+    ]);
+
+    const groups = new Map();
+    const groupFor = (collectionid, playerName) => {
+      if (!groups.has(collectionid)) {
+        groups.set(collectionid, {
+          collectionid,
+          name: playerName ?? null,
+          owed: CREDIT_ZERO,
+          sales: [],
+          payments: [],
+        });
+      }
+      return groups.get(collectionid);
+    };
+
+    for (const sale of sales) {
+      const group = groupFor(
+        sale.collectionid,
+        sale.collection?.player?.name
+      );
+      const remaining = saleRemaining(sale);
+      if (remaining.lte(0)) continue;
+      group.owed = group.owed.add(remaining);
+      group.sales.push({
+        id: sale.id,
+        date: sale.date,
+        name: sale.cardgeneral?.name ?? null,
+        image: sale.cardgeneral?.image ?? null,
+        cardsetname: sale.cardgeneral?.cardsetname ?? null,
+        quantity: sale.quantity,
+        total: new Prisma.Decimal(sale.price).mul(sale.quantity).toFixed(2),
+        net: saleNet(sale).toFixed(2),
+        remaining: remaining.toFixed(2),
+        // A boundary sale partially eaten by credit use.
+        partial: new Prisma.Decimal(sale.paidamount ?? 0).gt(0),
+      });
     }
 
-    // Store the payment in the database
-    const payment = await prisma.payment.create({
-      data: {
-        date: Math.round(Date.now() / 1000),
-        ammount,
-        collectionid: collectionId,
-      },
-      select: { date: true, ammount: true },
+    // The ledger under each group: what has already been settled, newest
+    // first. `kind` rides along because a credit row is not cash that changed
+    // hands, and a history that hid the difference would read wrong.
+    for (const payment of history) {
+      const group = groupFor(
+        payment.collectionid,
+        payment.collection?.player?.name
+      );
+      group.payments.push({
+        id: payment.id,
+        date: payment.date,
+        ammount: payment.ammount.toFixed(2),
+        kind: payment.kind,
+      });
+    }
+
+    return res.status(200).json(
+      [...groups.values()]
+        .map((group) => ({ ...group, owed: group.owed.toFixed(2) }))
+        .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+    );
+  })
+);
+
+// A player's spendable store credit — what the store owes them, sale by sale.
+// The order-completion sidebar asks this before offering credit as a way to
+// pay.
+router.get(
+  "/credit/:playerId",
+  [check("playerId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const collection = await prisma.collection.findFirst({
+      where: { playerid: parseInt(req.params.playerId, 10), active: true },
+      select: { id: true },
+    });
+    if (!collection) {
+      return res.status(200).json({ credit: "0.00" });
+    }
+    const credit = await creditFor(prisma, collection.id);
+    return res.status(200).json({ credit: credit.toFixed(2) });
+  })
+);
+
+// Pay the consignor for specific sold cards.
+//
+// The Pagar page selects sales; each is settled in full (paidamount = net)
+// and one payout ledger row per collection records the cash that changed
+// hands. Already-settled ids are skipped rather than paid twice.
+router.post(
+  "/payment",
+  [owner],
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const ids = Array.isArray(req.body.saleids)
+      ? req.body.saleids.map((v) => parseInt(v, 10)).filter(Number.isInteger)
+      : [];
+    if (!ids.length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    const now = nowSeconds();
+    const paid = await prisma.$transaction(async (tx) => {
+      const sales = await tx.sale.findMany({ where: { id: { in: ids } } });
+      const byCollection = new Map();
+      for (const sale of sales) {
+        const remaining = saleRemaining(sale);
+        if (remaining.lte(0)) continue;
+        await tx.sale.update({
+          where: { id: sale.id },
+          data: { paidamount: saleNet(sale), paiddate: now },
+        });
+        byCollection.set(
+          sale.collectionid,
+          (byCollection.get(sale.collectionid) ?? CREDIT_ZERO).add(remaining)
+        );
+      }
+      let total = CREDIT_ZERO;
+      for (const [collectionid, ammount] of byCollection) {
+        await tx.payment.create({
+          data: { collectionid, ammount, kind: "payout", date: now },
+        });
+        total = total.add(ammount);
+      }
+      return total;
     });
 
-    res.status(201).json(payment);
+    return res.status(200).json({
+      message: messages.PAYMENT_DONE,
+      paid: paid.toFixed(2),
+    });
   })
 );
 
@@ -197,6 +340,7 @@ router.get(
           price: true,
           percent: true,
           quantity: true,
+          paidamount: true,
         },
       }),
       prisma.payment.groupBy({
@@ -219,10 +363,14 @@ router.get(
     const totals = new Map();
     for (const sale of sales) {
       const entry =
-        totals.get(sale.collectionid) ?? { sales: ZERO, commission: ZERO };
+        totals.get(sale.collectionid) ??
+        { sales: ZERO, commission: ZERO, outstanding: ZERO };
       const lineTotal = sale.price.mul(sale.quantity);
       entry.sales = entry.sales.add(lineTotal);
       entry.commission = entry.commission.add(lineTotal.mul(sale.percent));
+      // Owed is per-sale settlement now, not sales minus lump payments: the
+      // ledger records history, `paidamount` records truth.
+      entry.outstanding = entry.outstanding.add(saleRemaining(sale));
       totals.set(sale.collectionid, entry);
     }
 
@@ -241,7 +389,7 @@ router.get(
         sales: t.sales.toFixed(2),
         commission: t.commission.toFixed(2),
         payments: paid.toFixed(2),
-        outstanding: t.sales.sub(t.commission).sub(paid).toFixed(2),
+        outstanding: t.outstanding.toFixed(2),
       };
     });
 
@@ -270,7 +418,6 @@ function describeOrder(order) {
     created: order.created,
     expires: order.expires,
     closed: order.closed,
-    note: order.note,
     player: order.player
       ? { id: order.player.id, name: order.player.name }
       : null,
@@ -377,8 +524,15 @@ router.post(
       });
     }
 
+    // Paying with store credit needs a customer to owe money to; a counter
+    // bag has nobody behind it.
+    const payWithCredit = req.body?.paywithcredit === true;
+    if (payWithCredit && !order.playerid) {
+      return res.status(400).json({ message: messages.CREDIT_NOT_YOURS });
+    }
+
     const today = nowSeconds();
-    await prisma.$transaction(async (tx) => {
+    const settlement = await prisma.$transaction(async (tx) => {
       for (const line of order.orderline) {
         const placementIds = line.cardplacement.map((pl) => pl.id);
         if (line.kind === "withdrawal") {
@@ -404,6 +558,26 @@ router.post(
         where: { id },
         data: { status: "completed", closed: today },
       });
+
+      // Settle as much of the bill as the buyer's credit covers — what the
+      // store owes them for their own sold cards, consumed oldest first. The
+      // remainder is cash across the counter, reported so the till knows what
+      // to charge.
+      if (!payWithCredit) return null;
+      const total = order.orderline
+        .filter((line) => line.kind !== "withdrawal")
+        .reduce(
+          (sum, line) => sum.add(new Prisma.Decimal(line.price).mul(line.quantity)),
+          CREDIT_ZERO
+        );
+      if (total.lte(0)) return null;
+      const collection = await tx.collection.findFirst({
+        where: { playerid: order.playerid, active: true },
+        select: { id: true },
+      });
+      if (!collection) return null;
+      const used = await consumeCredit(tx, collection.id, total, today);
+      return { creditused: used.toFixed(2), cashdue: total.sub(used).toFixed(2) };
     });
 
     // Nothing was charged if the whole bag was the customer's own cards going
@@ -415,6 +589,7 @@ router.post(
       message: chargedForAnything
         ? messages.ORDER_COMPLETED
         : messages.ORDER_HANDED_OVER,
+      ...(settlement ?? {}),
     });
   })
 );
@@ -444,6 +619,13 @@ router.post(
     const refile = await refileInstructions(prisma, id);
 
     await prisma.$transaction(async (tx) => {
+      // Flag before unlinking: the flag is what keeps these cards on the home
+      // page's refile panel until somebody has physically put them back, and
+      // the where-clause needs the link that refileOrder is about to clear.
+      await tx.cardplacement.updateMany({
+        where: { orderline: { orderid: id } },
+        data: { needsrefile: true },
+      });
       await refileOrder(tx, id);
       await tx.order.update({
         where: { id },
@@ -452,6 +634,257 @@ router.post(
     });
 
     return res.status(200).json({ message: messages.ORDER_CANCELLED, refile });
+  })
+);
+
+// ---------------------------------------------------------------------------
+// Counter sales: the bag on the till.
+//
+// A walk-in sale is the same lifecycle as a reservation — cards move from
+// their containers into a bag, completing writes the sale rows that credit
+// each card's owner, cancelling refiles — except there is no customer account
+// behind it. One counter bag is open at a time; it IS the sale in progress.
+// ---------------------------------------------------------------------------
+
+async function openCounterBag(prisma) {
+  return prisma.order.findFirst({
+    where: { playerid: null, status: "pending" },
+    include: {
+      orderline: { include: ORDER_LINE_INCLUDE },
+      player: { select: { id: true, name: true } },
+    },
+    orderBy: { created: "asc" },
+  });
+}
+
+// What the till sees for a name: each stock row with its physical copies.
+//
+// The storefront's search answers "how many can be bought"; the till needs
+// "which copy is in my hand" — the person has already pulled a card out of a
+// binder, and ringing up the wrong copy leaves the shelf lying about what it
+// holds. So every row carries its sellable placements (filed in a for-sale
+// container, not in a bag), each with the address to match against the real
+// card, and the owner so staff see whose consignment they are selling.
+router.get(
+  "/countersale/search",
+  [check("name").trim().isLength({ min: 2 })],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const name = String(req.query.name).trim();
+
+    await releaseExpiredOrders(prisma);
+
+    const cards = await prisma.card.findMany({
+      where: {
+        approved: true,
+        collection: { active: true },
+        cardgeneral: { name: { contains: name, mode: "insensitive" } },
+      },
+      include: {
+        cardgeneral: true,
+        cardcondition: { select: { name: true } },
+        cardlanguage: { select: { name: true } },
+        collection: { select: { player: { select: { name: true } } } },
+        cardplacement: {
+          where: { orderlineid: null, storage: { state: "for_sale" } },
+          include: LOCATION_INCLUDE,
+        },
+      },
+      orderBy: [{ id: "asc" }],
+      // The till types a name, not a category — a match this wide means the
+      // query was too short to be useful anyway.
+      take: 60,
+    });
+
+    const { reserved, offSale } = await availabilityFor(prisma, cards);
+
+    return res.status(200).json({
+      cards: cards
+        .map((card) => ({
+          id: card.id,
+          name: card.cardgeneral?.name ?? null,
+          image: card.cardgeneral?.image ?? null,
+          cardsetcode: card.cardgeneral?.cardsetcode ?? null,
+          cardsetname: card.cardgeneral?.cardsetname ?? null,
+          collectornumber: card.cardgeneral?.collectornumber ?? null,
+          variant: card.variant,
+          condition: card.cardcondition?.name ?? null,
+          language: card.cardlanguage?.name ?? null,
+          owner: card.collection?.player?.name ?? null,
+          price: card.price,
+          available: availableOf(card, reserved, offSale),
+          copies: sortLocations(card.cardplacement.map(describeLocation)),
+        }))
+        // A row with nothing to hand over would only offer disabled buttons.
+        .filter((row) => row.available > 0 || row.copies.length > 0),
+    });
+  })
+);
+
+// The sale in progress, or null when the till is clear.
+router.get(
+  "/countersale",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    await releaseExpiredOrders(prisma);
+    const bag = await openCounterBag(prisma);
+    return res.status(200).json(bag ? describeOrder(bag) : null);
+  })
+);
+
+// Ring one copy up: into the bag, off availability.
+router.post(
+  "/countersale/add",
+  [check("cardid").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const cardid = parseInt(req.body.cardid, 10);
+
+    await releaseExpiredOrders(prisma);
+
+    const card = await prisma.card.findFirst({
+      where: { id: cardid, approved: true, collection: { active: true } },
+      include: { cardgeneral: { select: { name: true } } },
+    });
+    if (!card) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+    const { reserved, offSale } = await availabilityFor(prisma, [card]);
+    if (availableOf(card, reserved, offSale) < 1) {
+      return res.status(400).json({ message: messages.ORDER_NOT_ENOUGH_STOCK });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      let bag = await tx.order.findFirst({
+        where: { playerid: null, status: "pending" },
+        orderBy: { created: "asc" },
+      });
+      if (!bag) {
+        // No expiry: the bag lives exactly as long as the sale conversation.
+        bag = await tx.order.create({
+          data: { playerid: null, status: "pending", created: nowSeconds() },
+        });
+      }
+
+      // Sold at today's price — a counter sale has no earlier quote to honour.
+      const line = await tx.orderline.findFirst({
+        where: { orderid: bag.id, cardid: card.id },
+      });
+      let lineId;
+      if (line) {
+        await tx.orderline.update({
+          where: { id: line.id },
+          data: { quantity: line.quantity + 1 },
+        });
+        lineId = line.id;
+      } else {
+        const created = await tx.orderline.create({
+          data: {
+            orderid: bag.id,
+            cardid: card.id,
+            quantity: 1,
+            price: card.price ?? 0,
+            kind: "purchase",
+          },
+        });
+        lineId = created.id;
+      }
+
+      // The caller may name the copy actually pulled off the shelf; otherwise
+      // take the first not already in a bag.
+      const wanted = req.body.placementid
+        ? await tx.cardplacement.findFirst({
+            where: {
+              id: parseInt(req.body.placementid, 10),
+              cardid: card.id,
+              orderlineid: null,
+            },
+          })
+        : await tx.cardplacement.findFirst({
+            where: { cardid: card.id, orderlineid: null },
+            orderBy: [
+              { page: "asc" },
+              { pocket: "asc" },
+              { sequence: "asc" },
+              { id: "asc" },
+            ],
+          });
+      if (wanted) {
+        await tx.cardplacement.update({
+          where: { id: wanted.id },
+          data: { orderlineid: lineId },
+        });
+      }
+    });
+
+    const bag = await openCounterBag(prisma);
+    return res.status(201).json(describeOrder(bag));
+  })
+);
+
+// ---------------------------------------------------------------------------
+// The refile queue: cards out of cancelled or expired bags, physically waiting
+// to be put back where their coordinates say.
+// ---------------------------------------------------------------------------
+
+router.get(
+  "/refile",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const placements = await prisma.cardplacement.findMany({
+      where: { needsrefile: true },
+      include: {
+        storage: { select: { id: true, name: true, type: true } },
+        card: {
+          include: {
+            cardgeneral: { select: { name: true, cardsetcode: true } },
+          },
+        },
+      },
+      orderBy: [{ storageid: "asc" }, { page: "asc" }, { sequence: "asc" }],
+    });
+    return res.status(200).json(
+      placements.map((pl) => ({
+        placementid: pl.id,
+        cardid: pl.cardid,
+        name: pl.card?.cardgeneral?.name ?? null,
+        cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
+        storageid: pl.storage?.id ?? null,
+        storagename: pl.storage?.name ?? null,
+        storagetype: pl.storage?.type ?? null,
+        page: pl.page,
+        pocket: pl.pocket,
+        depth: pl.depth,
+        sequence: pl.sequence,
+      }))
+    );
+  })
+);
+
+// The cards listed are physically back in their pockets; stop showing them.
+router.post(
+  "/refile/done",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const ids = Array.isArray(req.body.placementids)
+      ? req.body.placementids.map((v) => parseInt(v, 10)).filter(Number.isInteger)
+      : [];
+    if (!ids.length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    await prisma.cardplacement.updateMany({
+      where: { id: { in: ids }, needsrefile: true },
+      data: { needsrefile: false },
+    });
+    return res.status(200).json({ message: messages.REFILE_CLEARED });
   })
 );
 
@@ -635,6 +1068,14 @@ router.get(
       orderBy: [{ playerid: "asc" }, { found: "asc" }],
     });
 
+    // What is ACTUALLY free right now, not what was free when the match was
+    // found. A match is a snapshot: between matcher runs the copies can be
+    // bagged for someone else, sold at the counter, or ride their container
+    // home. The queue has to say so, or it offers work that ends in "not
+    // enough stock" at the shelf.
+    const matchedCards = found.map((m) => m.card).filter(Boolean);
+    const { reserved, offSale } = await availabilityFor(prisma, matchedCards);
+
     // Group by customer: the unit of work is "fill this person's bag", not
     // "act on this one card".
     const byPlayer = new Map();
@@ -667,12 +1108,25 @@ router.get(
         condition: match.card?.cardcondition?.name ?? null,
         language: match.card?.cardlanguage?.name ?? null,
         price: match.card?.price ?? null,
-        available: match.card?.quantity ?? 0,
+        available: match.card
+          ? availableOf(match.card, reserved, offSale)
+          : 0,
         // Every copy's whereabouts, nearest-to-hand first. A copy already in
         // someone else's bag is flagged rather than hidden, so the shop is not
         // sent looking for it in a pocket it has left.
+        //
+        // A withdrawal is the customer taking THEIR card home, and it comes
+        // out of THEIR binder or box — never out of the shop's display, where
+        // an identical copy may be sitting for sale. So only the wisher's own
+        // containers are offered.
         locations: sortLocations(
-          (match.card?.cardplacement ?? []).map(describeLocation)
+          (match.card?.cardplacement ?? [])
+            .filter(
+              (pl) =>
+                match.kind !== "withdrawal" ||
+                pl.storage?.playerid === match.playerid
+            )
+            .map(describeLocation)
         ),
       });
     }
@@ -700,139 +1154,16 @@ router.post(
     const prisma = req.prisma;
     const id = parseInt(req.params.matchId, 10);
 
-    const match = await prisma.wishlistmatch.findUnique({
-      where: { id },
-      include: {
-        card: { include: { cardgeneral: { select: { name: true, cardsetcode: true } } } },
-      },
-    });
-    if (!match || match.resolved) {
-      return res.status(404).json({ message: messages.MATCH_NOT_FOUND });
+    try {
+      // The caller may name the copy they actually took; otherwise the first
+      // not already in a bag is taken.
+      await setAsideMatch(prisma, id, req.body.placementid);
+    } catch (err) {
+      if (err instanceof MatchError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      throw err;
     }
-
-    await releaseExpiredOrders(prisma);
-
-    // Is the card still actually free to give away? Both a reservation and a
-    // retired container take it out of reach.
-    const { reserved, offSale } = await availabilityFor(prisma, [match.card]);
-    const available = availableOf(match.card, reserved, offSale);
-    if (available < 1) {
-      return res.status(400).json({ message: messages.ORDER_NOT_ENOUGH_STOCK });
-    }
-
-    await prisma.$transaction(async (tx) => {
-      // One open bag per customer; anything already set aside joins it.
-      let bag = await tx.order.findFirst({
-        where: { playerid: match.playerid, status: "pending" },
-        orderBy: { created: "asc" },
-      });
-      if (!bag) {
-        bag = await tx.order.create({
-          data: {
-            playerid: match.playerid,
-            status: "pending",
-            created: nowSeconds(),
-            expires: expiryFromNow(),
-          },
-        });
-      }
-
-      // A withdrawal is the customer's own card, so it is priced at zero:
-      // nothing is owed for taking it home.
-      const price = match.kind === "withdrawal" ? 0 : match.card?.price ?? 0;
-
-      const line = await tx.orderline.findFirst({
-        where: { orderid: bag.id, cardid: match.cardid },
-      });
-      let lineId;
-      if (line) {
-        await tx.orderline.update({
-          where: { id: line.id },
-          data: { quantity: line.quantity + 1 },
-        });
-        lineId = line.id;
-      } else {
-        const created = await tx.orderline.create({
-          data: {
-            orderid: bag.id,
-            cardid: match.cardid,
-            quantity: 1,
-            price,
-            kind: match.kind,
-          },
-        });
-        lineId = created.id;
-      }
-
-      // The card physically moves into the bag, but its placement is KEPT and
-      // attached to the line instead of being deleted: it is the only record
-      // of where the copy belongs, and a cancelled order has to be refiled.
-      // Views of container contents exclude bagged placements, so the card
-      // still stops showing as being in the pocket.
-      //
-      // The caller may name the copy they actually took; otherwise take the
-      // first not already in a bag.
-      const wanted = req.body.placementid
-        ? await tx.cardplacement.findFirst({
-            where: {
-              id: parseInt(req.body.placementid, 10),
-              cardid: match.cardid,
-              orderlineid: null,
-            },
-          })
-        : await tx.cardplacement.findFirst({
-            where: { cardid: match.cardid, orderlineid: null },
-            orderBy: [{ page: "asc" }, { pocket: "asc" }, { sequence: "asc" }, { id: "asc" }],
-          });
-      if (wanted) {
-        await tx.cardplacement.update({
-          where: { id: wanted.id },
-          data: { orderlineid: lineId },
-        });
-      }
-
-      // The wish is answered only once enough copies are in the bag.
-      //
-      // Setting one aside used to delete the entry outright, which was right
-      // while every wish was for a single copy. A customer wanting three would
-      // otherwise lose the entry after the first, and the remaining two would
-      // never be looked for again.
-      const wish = await tx.wishlist.findUnique({
-        where: { id: match.wishlistid },
-      });
-      const bagged = await tx.orderline.aggregate({
-        where: {
-          orderid: bag.id,
-          card: { cardgeneral: { name: { equals: wish.name, mode: "insensitive" } } },
-        },
-        _sum: { quantity: true },
-      });
-      const answered = (bagged._sum.quantity ?? 0) >= wish.quantity;
-      if (answered) {
-        await tx.wishlist.delete({ where: { id: match.wishlistid } });
-      }
-
-      // Tell the customer, once the wish is complete. Fired here rather than
-      // when the match was found: until the card is actually pulled it could
-      // still be sold at the counter, and promising it first would be a lie
-      // some of the time. Held back until the last copy so somebody wanting
-      // three is not told "ready" three times.
-      if (answered) await tx.notification.create({
-        data: {
-          playerid: match.playerid,
-          kind:
-            match.kind === "withdrawal"
-              ? "wishlist_withdrawal_ready"
-              : "wishlist_purchase_ready",
-          // Snapshotted: the card row disappears once the order completes.
-          cardname: match.card?.cardgeneral?.name ?? null,
-          cardsetcode: match.card?.cardgeneral?.cardsetcode ?? null,
-          variant: match.card?.variant ?? null,
-          orderid: bag.id,
-          created: nowSeconds(),
-        },
-      });
-    });
 
     return res.status(200).json({ message: messages.MATCH_SET_ASIDE });
   })
@@ -1044,6 +1375,199 @@ router.put(
     });
     void updated;
     return res.status(200).json(fresh);
+  })
+);
+
+const PIN_PRINTING_SELECT = {
+  name: true,
+  image: true,
+  cardsetcode: true,
+  cardsetname: true,
+  collectornumber: true,
+};
+
+// Every fixed price. Mostly printing-level pins (the `fixedprice` table),
+// which exist whether or not the version is in stock; any stock row that is
+// locked WITHOUT a pin behind it (set before pins existed, or by hand in the
+// database) is appended so it stays visible and resettable rather than
+// becoming a lock nobody can find.
+router.get(
+  "/prices/fixed",
+  [owner],
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+
+    const pins = await prisma.fixedprice.findMany({
+      include: { cardgeneral: { select: PIN_PRINTING_SELECT } },
+      orderBy: [{ updated: "desc" }],
+    });
+
+    // How many stock rows currently carry each pin, so the page can say
+    // "sin stock" on a pin that is waiting for copies to arrive.
+    const counts = await prisma.card.groupBy({
+      by: ["scryfallid"],
+      where: {
+        scryfallid: { in: pins.map((p) => p.scryfallid) },
+        collection: { active: true },
+      },
+      _count: { _all: true },
+    });
+    const inStock = new Map(counts.map((c) => [c.scryfallid, c._count._all]));
+
+    const legacy = await prisma.card.findMany({
+      where: {
+        collection: { active: true },
+        scryfallid: { notIn: pins.map((p) => p.scryfallid) },
+        OR: [{ pricelocked: true }, { buypricelocked: true }],
+      },
+      include: {
+        cardgeneral: { select: PIN_PRINTING_SELECT },
+        cardcondition: { select: { name: true } },
+        cardlanguage: { select: { name: true } },
+      },
+      orderBy: [{ id: "asc" }],
+    });
+
+    return res.status(200).json([
+      ...pins.map((pin) => ({
+        kind: "version",
+        scryfallid: pin.scryfallid,
+        name: pin.cardgeneral?.name ?? null,
+        image: pin.cardgeneral?.image ?? null,
+        cardsetcode: pin.cardgeneral?.cardsetcode ?? null,
+        cardsetname: pin.cardgeneral?.cardsetname ?? null,
+        collectornumber: pin.cardgeneral?.collectornumber ?? null,
+        price: pin.price,
+        buyprice: pin.buyprice,
+        pricelocked: pin.price !== null,
+        buypricelocked: pin.buyprice !== null,
+        instock: inStock.get(pin.scryfallid) ?? 0,
+      })),
+      ...legacy.map((card) => ({
+        kind: "row",
+        id: card.id,
+        scryfallid: card.scryfallid,
+        name: card.cardgeneral?.name ?? null,
+        image: card.cardgeneral?.image ?? null,
+        cardsetcode: card.cardgeneral?.cardsetcode ?? null,
+        cardsetname: card.cardgeneral?.cardsetname ?? null,
+        collectornumber: card.cardgeneral?.collectornumber ?? null,
+        variant: card.variant,
+        condition: card.cardcondition?.name ?? null,
+        language: card.cardlanguage?.name ?? null,
+        price: card.price,
+        buyprice: card.buyprice,
+        pricelocked: card.pricelocked,
+        buypricelocked: card.buypricelocked,
+      })),
+    ]);
+  })
+);
+
+// Fix a price by PRINTING, in stock or not.
+//
+// The pin is stored on the printing (`fixedprice`) and stamped onto whatever
+// stock exists right now; stock that arrives later is stamped at creation
+// (applyFixedPrice) and re-stamped by every price import, so fixing a price
+// on an empty shelf means "when it shows up, it costs this". Sell and buy are
+// independent — a side left out keeps following the market, and repeating the
+// call with the other side fills the pin in rather than replacing it.
+router.put(
+  "/prices/fixed",
+  [owner, check("scryfallid").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const scryfallid = String(req.body.scryfallid).trim();
+
+    const printing = await prisma.cardgeneral.findUnique({
+      where: { scryfallid },
+      select: { scryfallid: true },
+    });
+    if (!printing) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+
+    const now = nowSeconds();
+    const pinData = {};
+    const stampData = {};
+    if (req.body.price !== undefined && req.body.price !== null) {
+      if (!(Number(req.body.price) >= 0)) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      pinData.price = Number(req.body.price);
+      stampData.price = pinData.price;
+      stampData.pricelocked = true;
+      stampData.priceupdate = now;
+    }
+    if (req.body.buyprice !== undefined && req.body.buyprice !== null) {
+      if (!(Number(req.body.buyprice) >= 0)) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      pinData.buyprice = Number(req.body.buyprice);
+      stampData.buyprice = pinData.buyprice;
+      stampData.buypricelocked = true;
+      stampData.buypriceupdate = now;
+    }
+    if (!Object.keys(pinData).length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    await prisma.fixedprice.upsert({
+      where: { scryfallid },
+      create: { scryfallid, ...pinData, updated: now },
+      update: { ...pinData, updated: now },
+    });
+
+    const { count } = await prisma.card.updateMany({
+      where: { scryfallid, collection: { active: true } },
+      data: stampData,
+    });
+
+    return res.status(200).json({ updated: count });
+  })
+);
+
+// Unpin a printing: the version rejoins the market. The pin goes, its stock
+// rows unlock, and the reference price is put back straight away rather than
+// leaving a stale manual number until the nightly run.
+router.delete(
+  "/prices/fixed/:scryfallid",
+  [owner, check("scryfallid").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const scryfallid = String(req.params.scryfallid).trim();
+
+    const pin = await prisma.fixedprice.findUnique({ where: { scryfallid } });
+    if (!pin) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+    // The pin goes first: applyReferencePrices re-stamps any pin it can still
+    // see, so deleting after unlocking would race it back on.
+    await prisma.fixedprice.delete({ where: { scryfallid } });
+
+    const rows = await prisma.card.findMany({
+      where: { scryfallid },
+      select: { id: true },
+    });
+    if (rows.length) {
+      await prisma.card.updateMany({
+        where: { scryfallid },
+        data: { pricelocked: false, buypricelocked: false },
+      });
+      await applyReferencePrices(prisma, {
+        onlyCardIds: rows.map((r) => r.id),
+      });
+    }
+
+    return res.status(200).json({ message: messages.PIN_REMOVED });
   })
 );
 

@@ -23,9 +23,19 @@ import {
   ContentsError,
   readContents,
   placeCopy,
-  removePlacement,
   movePlacement,
+  setBinderPosition,
+  reorderSorted,
 } from "../services/storageContents.js";
+import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
+import { isPaperPrinting } from "../services/paper.js";
+import {
+  removeCopy,
+  duplicateCopy,
+  discardStandby,
+  addPrintingCopy,
+} from "../services/copies.js";
+import { raisePinnedMatch } from "../services/matches.js";
 
 const TYPES = ["binder", "sorted_box", "unsorted_box"];
 
@@ -376,6 +386,61 @@ router.post(
   })
 );
 
+// Ask for one of your own cards back, out of a container the shop is holding.
+//
+// The mirror of editing: while the container is in the shop, the customer
+// cannot rearrange it — but the cards are still theirs, and wanting one back
+// should not require walking in and asking. This raises the same withdrawal
+// match the matcher would, so the request lands on the shop's home queue as
+// a pick-up to prepare; nothing moves until somebody physically pulls it.
+router.post(
+  "/placement/:placementId/withdraw",
+  [check("placementId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const placement = await prisma.cardplacement.findUnique({
+      where: { id: parseInt(req.params.placementId, 10) },
+      include: {
+        storage: true,
+        card: {
+          include: {
+            cardgeneral: { select: { name: true } },
+            collection: { select: { playerid: true } },
+          },
+        },
+      },
+    });
+    if (!placement || placement.storage.playerid !== playerId) {
+      return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+    }
+    // Only from a container that is actually on the shop's shelf. In the
+    // customer's hands they just take the card out; retired or returning, the
+    // whole container is on its way back anyway.
+    if (placement.storage.state !== "for_sale") {
+      return res
+        .status(400)
+        .json({ message: messages.WITHDRAW_ONLY_IN_SHOP });
+    }
+    if (placement.orderlineid !== null) {
+      return res.status(400).json({ message: messages.COPY_ALREADY_PLACED });
+    }
+
+    // Asking twice is asking for two copies, so the second request bumps the
+    // wanted quantity instead of dissolving into the first.
+    await raisePinnedMatch(prisma, playerId, placement.card, {
+      bumpWanted: true,
+    });
+
+    return res.status(201).json({ message: messages.WITHDRAW_REQUESTED });
+  })
+);
+
 // Take one of the customer's copies out of one of their containers.
 router.delete(
   "/placement/:placementId",
@@ -405,8 +470,223 @@ router.delete(
       return res.status(400).json({ message: messages.PLACEMENT_COMMITTED });
     }
 
-    await removePlacement(req.prisma, placement);
-    return res.status(200).json({ message: messages.PLACEMENT_REMOVED });
+    // Removes the COPY, not just its address: a card with no container is the
+    // thing this model no longer allows.
+    const result = await removeCopy(req.prisma, placement);
+    return res.status(200).json({
+      message: messages.PLACEMENT_REMOVED,
+      cardDeleted: result.cardDeleted,
+    });
+  })
+);
+
+// Add one copy of a printing to this container.
+//
+// Creating the card and placing a copy are one action here, not two calls, so
+// there is no instant where a card exists with nowhere to be. Always exactly
+// one copy: wanting three is three uses of duplicate, which is also how the
+// stand-by area works.
+//
+// Where it lands depends on the container, because "somewhere sensible" means
+// something different in each:
+//
+//   binder      -> the stand-by area, to be dragged into a pocket
+//   sorted_box  -> the front, since a new card is the one you are holding
+//   unsorted_box-> nowhere in particular; the view is alphabetical
+router.post(
+  "/:storageId/add",
+  [check("storageId").isNumeric(), check("scryfallid").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    try {
+      const unit = await ownUnit(
+        prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+
+      const scryfallid = String(req.body.scryfallid).trim();
+      const conditionid = parseInt(req.body.conditionid, 10);
+      const languageid = parseInt(req.body.languageid, 10);
+      const variant = String(req.body.variant ?? DEFAULT_FINISH).trim();
+
+      const printing = await prisma.cardgeneral.findUnique({
+        where: { scryfallid },
+      });
+      if (!printing) {
+        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+      if (!isPaperPrinting(printing)) {
+        return res.status(400).json({ message: messages.CARD_DIGITAL_ONLY });
+      }
+      const finishes = finishesFor(printing);
+      if (!finishes.includes(variant)) {
+        return res.status(400).json({
+          message: messages.FINISH_NOT_AVAILABLE,
+          finishes,
+        });
+      }
+
+      const collection = await prisma.collection.findFirst({
+        where: { playerid: playerId, active: true },
+        select: { id: true },
+      });
+      if (!collection) {
+        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+      }
+
+      const placement = await addPrintingCopy(prisma, unit, collection.id, {
+        scryfallid,
+        conditionid,
+        languageid,
+        variant,
+      });
+
+      return res.status(201).json(placement);
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Put a copy somewhere in this binder — a pocket, or the stand-by area.
+//
+// Body: { page, pocket } to file it, or { standby: true } to lift it out.
+//
+// One endpoint for both because they are the same gesture: dragging a card
+// somewhere. The stand-by area is a real position (page and pocket null), not a
+// UI holding pen, so a half-finished sort survives a reload.
+router.put(
+  "/placement/:placementId/position",
+  [check("placementId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const placement = await prisma.cardplacement.findUnique({
+      where: { id: parseInt(req.params.placementId, 10) },
+      include: { storage: true },
+    });
+    if (!placement || placement.storage.playerid !== playerId) {
+      return res.status(404).json({ message: messages.PLACEMENT_NOT_FOUND });
+    }
+    if (placement.orderlineid !== null) {
+      return res.status(400).json({ message: messages.PLACEMENT_COMMITTED });
+    }
+    try {
+      assertEditable(placement.storage);
+      return res
+        .status(200)
+        .json(await setBinderPosition(prisma, placement, req.body));
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Another copy of the same card, in the stand-by area.
+//
+// For someone who owns three of a printing and wants them in three pockets:
+// add it once, duplicate twice, drag each into place — rather than searching
+// out the same printing three times.
+router.post(
+  "/placement/:placementId/duplicate",
+  [check("placementId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+
+    const placement = await req.prisma.cardplacement.findUnique({
+      where: { id: parseInt(req.params.placementId, 10) },
+      include: { storage: true },
+    });
+    if (!placement || placement.storage.playerid !== playerId) {
+      return res.status(404).json({ message: messages.PLACEMENT_NOT_FOUND });
+    }
+    try {
+      assertEditable(placement.storage);
+      const created = await duplicateCopy(req.prisma, placement);
+      return res.status(201).json(created);
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Throw away whatever is left in a binder's stand-by area.
+//
+// Called when the customer finishes editing. These copies were taken out of a
+// pocket and never put back, and a card with nowhere to live is exactly what
+// this model does not allow — so they leave the collection. The UI warns first;
+// this is the part that actually does it.
+router.post(
+  "/:storageId/discard-standby",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+
+    try {
+      const unit = await ownUnit(
+        req.prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+      const removed = await discardStandby(req.prisma, unit.id);
+      return res.status(200).json({ removed });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Reorder a sorted box.
+//
+// Body: { placementids: [...] } in the order they should sit. Sent whole rather
+// than as "move item 3 to position 7", so the result is exactly what the
+// customer sees on screen and two reorders cannot interleave into a sequence
+// nobody asked for.
+router.put(
+  "/:storageId/order",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    try {
+      const unit = await ownUnit(
+        req.prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+      const ordered = await reorderSorted(prisma, unit, req.body.placementids);
+      return res.status(200).json({ ordered });
+    } catch (err) {
+      return handle(err, res);
+    }
   })
 );
 

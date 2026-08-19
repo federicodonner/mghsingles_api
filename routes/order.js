@@ -35,7 +35,6 @@ function describeOrder(order) {
     created: order.created,
     expires: order.expires,
     closed: order.closed,
-    note: order.note,
     player: order.player ? { id: order.player.id, name: order.player.name } : undefined,
     lines: order.orderline.map((line) => ({
       id: line.id,
@@ -81,7 +80,7 @@ router.get(
 
 // Place a reservation.
 //
-// Body: { lines: [{ cardid, quantity }], note }
+// Body: { lines: [{ cardid, quantity }] }
 router.post(
   "/",
   asyncHandler(async (req, res) => {
@@ -156,7 +155,6 @@ router.post(
           status: "pending",
           created: nowSeconds(),
           expires: expiryFromNow(),
-          note: typeof req.body.note === "string" ? req.body.note.slice(0, 500) : null,
         },
       });
       await tx.orderline.createMany({

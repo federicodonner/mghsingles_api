@@ -37,7 +37,9 @@ export async function releaseExpiredOrders(prisma) {
   if (lapsing.length) {
     await prisma.cardplacement.updateMany({
       where: { orderline: { orderid: { in: lapsing.map((o) => o.id) } } },
-      data: { orderlineid: null },
+      // Flagged for the home page's refile panel: the copies are physically in
+      // a lapsed bag on the counter until somebody puts them back.
+      data: { orderlineid: null, needsrefile: true },
     });
   }
 

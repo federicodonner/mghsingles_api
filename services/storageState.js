@@ -50,6 +50,14 @@ export const shopCanMove = (from, to) =>
 // A customer may rearrange a container only while it is in their hands.
 export const customerCanEdit = (state) => state === "released";
 
+// Whether the shop physically holds a customer's container. `for_sale` and
+// `retired` sit on the shop's shelf; `released` is in the customer's living
+// room and `returning` is announced but not yet handed over, so neither is
+// behind the counter to touch. Whoever holds a binder may rearrange it —
+// which is why this exists next to customerCanEdit: the two must partition
+// the states, or a binder would be rearrangeable from both sides at once.
+export const shopHolds = (state) => state === "for_sale" || state === "retired";
+
 // Copies in this container that are committed to somebody's pick-up bag.
 //
 // These must not travel with the container when it is released: they are

@@ -33,6 +33,7 @@ export const LOCATION_INCLUDE = {
       name: true,
       type: true,
       state: true,
+      playerid: true,
       player: { select: { name: true } },
     },
   },

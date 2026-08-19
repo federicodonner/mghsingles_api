@@ -33,6 +33,13 @@ const readIds = (v) => readList(v, (x) => parseInt(x, 10));
 const readStrings = (v) => readList(v, (x) => String(x).trim());
 
 import { DEFAULT_FINISH } from "../services/finishes.js";
+import { releaseExpiredOrders } from "../services/orders.js";
+import { availabilityFor, availableOf } from "../services/availability.js";
+import {
+  setAsideMatch,
+  raisePinnedMatch,
+  MatchError,
+} from "../services/matches.js";
 
 // Does this card satisfy the entry? Each category is checked independently and
 // an empty list is a wildcard.
@@ -304,6 +311,61 @@ router.post(
     });
 
     return res.status(201).json(entry);
+  })
+);
+
+// Buy a card that is on the shelf right now.
+//
+// The wishlist-then-matcher road exists for cards the shop does NOT have; for
+// one it visibly does, waiting for the next matcher run only delays the
+// obvious. So this raises the match itself and puts the copy straight into the
+// customer's bag — reserved, and therefore off everyone else's inventory, in
+// the same request. The pinned wishlist entry is still created first: a match
+// is an answer to a wish, and the entry is what records exactly which copy was
+// asked for if anything downstream has to be unwound.
+router.post(
+  "/buy",
+  [check("cardid").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+    const cardid = parseInt(req.body.cardid, 10);
+
+    const card = await prisma.card.findFirst({
+      where: { id: cardid, approved: true, collection: { active: true } },
+      include: {
+        cardgeneral: { select: { name: true } },
+        collection: { select: { playerid: true } },
+      },
+    });
+    if (!card || !card.cardgeneral) {
+      return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+
+    await releaseExpiredOrders(prisma);
+    const { reserved, offSale } = await availabilityFor(prisma, [card]);
+    if (availableOf(card, reserved, offSale) < 1) {
+      return res.status(400).json({ message: messages.ORDER_NOT_ENOUGH_STOCK });
+    }
+
+    // The pinned entry and its match — exactly what the next matcher run
+    // would have raised for this copy.
+    const match = await raisePinnedMatch(prisma, playerId, card);
+
+    try {
+      await setAsideMatch(prisma, match.id);
+    } catch (err) {
+      if (err instanceof MatchError) {
+        return res.status(err.status).json({ message: err.message });
+      }
+      throw err;
+    }
+
+    return res.status(201).json({ message: messages.CARD_RESERVED_FOR_YOU });
   })
 );
 

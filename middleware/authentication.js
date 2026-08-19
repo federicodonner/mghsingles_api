@@ -28,11 +28,8 @@ export async function authentication(req, res, next) {
     orderBy: { date: "desc" },
   });
 
-  console.log("login afuera: " + login);
   if (!login) {
-    console.log("login adentro: " + login);
-    console.log("chau");
-    return res.status(403).json({ message: messages.UNAUTHORIZED });
+    return res.status(401).json({ message: messages.UNAUTHORIZED });
   }
 
   // If the token is found, verifies if the player exists
@@ -45,17 +42,11 @@ export async function authentication(req, res, next) {
     return res.status(401).json({ message: messages.UNAUTHORIZED });
   }
 
-  // If the player exists, verifies if it's the latest login
-  const verifyLatestToken = await prisma.login.findFirst({
-    where: { playerid: player.id },
-    orderBy: { date: "desc" },
-  });
-
-  // Verifies that the token in the last player login is the same
-  if (verifyLatestToken.token !== token) {
-    console.log("hola");
-    return res.status(403).json({ message: messages.UNAUTHORIZED });
-  }
+  // Any token from a real login is good: sessions coexist, so signing in on a
+  // second device (or a test harness signing in as you) does not kick the
+  // first one out. This used to reject everything but the LATEST login, which
+  // read as "the app keeps logging me out" to anybody with two sessions.
+  //
   // If the login is correct and the player is found, the id
   // is passed to the route from the middleware
   req.playerId = player.id;

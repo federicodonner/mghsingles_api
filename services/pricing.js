@@ -27,6 +27,36 @@ function toCents(value) {
     : new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
+// Stamp a printing's pinned price onto one stock row, if the printing has one.
+//
+// Called where card rows are BORN (adding to a collection, adding a copy to a
+// container), so a version fixed while out of stock prices its first arriving
+// copy immediately rather than at the next nightly run. Works inside a
+// transaction or on a plain client. Returns the update, or null when the
+// printing has no pin.
+export async function applyFixedPrice(db, card) {
+  if (!card?.scryfallid) return null;
+  const pin = await db.fixedprice.findUnique({
+    where: { scryfallid: card.scryfallid },
+  });
+  if (!pin) return null;
+
+  const now = Math.round(Date.now() / 1000);
+  const data = {};
+  if (pin.price !== null) {
+    data.price = pin.price;
+    data.pricelocked = true;
+    data.priceupdate = now;
+  }
+  if (pin.buyprice !== null) {
+    data.buyprice = pin.buyprice;
+    data.buypricelocked = true;
+    data.buypriceupdate = now;
+  }
+  if (!Object.keys(data).length) return null;
+  return db.card.update({ where: { id: card.id }, data });
+}
+
 // Recompute stock prices from the stored references.
 //
 // `onlyCardIds` limits the work to specific rows, which is what the
@@ -122,11 +152,45 @@ export async function applyReferencePrices(
     await prisma.card.update({ where: { id: update.id }, data: update.data });
   }
 
+  // Re-stamp the printing-level pins. Creation paths already stamp new rows,
+  // but a row that slipped in through any other door (a bulk import, a manual
+  // fix) picks the pin up here — the fixedprice table is authoritative until
+  // the pin is deleted, so an unlocked row of a pinned printing is a row that
+  // has drifted, not a choice to respect.
+  let pinned = 0;
+  const pins = await prisma.fixedprice.findMany({
+    where: onlyCardIds
+      ? {
+          scryfallid: {
+            in: [...new Set(cards.map((c) => c.scryfallid).filter(Boolean))],
+          },
+        }
+      : {},
+  });
+  for (const pin of pins) {
+    const rowScope = onlyCardIds ? { id: { in: onlyCardIds } } : {};
+    if (pin.price !== null) {
+      const { count } = await prisma.card.updateMany({
+        where: { ...rowScope, scryfallid: pin.scryfallid, pricelocked: false },
+        data: { price: pin.price, pricelocked: true, priceupdate: now },
+      });
+      pinned += count;
+    }
+    if (pin.buyprice !== null) {
+      const { count } = await prisma.card.updateMany({
+        where: { ...rowScope, scryfallid: pin.scryfallid, buypricelocked: false },
+        data: { buyprice: pin.buyprice, buypricelocked: true, buypriceupdate: now },
+      });
+      pinned += count;
+    }
+  }
+
   log(
     `pricing: ${cards.length} card(s) considered, ${sell} sell and ${buy} buy ` +
-      `price(s) updated, ${locked} locked, ${noReference} with no reference`
+      `price(s) updated, ${locked} locked, ${noReference} with no reference` +
+      (pinned ? `, ${pinned} re-pinned to a fixed price` : "")
   );
-  return { considered: cards.length, sell, buy, locked, noReference };
+  return { considered: cards.length, sell, buy, locked, noReference, pinned };
 }
 
 export default applyReferencePrices;

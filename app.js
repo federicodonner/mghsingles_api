@@ -49,13 +49,12 @@ app.put("/player/password", authentication);
 
 // Role gates for the shop side.
 //
-// Everything under /admin, /storage and /find needs at least staff. The handful
+// Everything under /admin and /storage needs at least staff. The handful
 // of owner-only routes are marked individually in routes/admin.js rather than
 // here, so the rule sits next to the thing it protects and a renamed path
 // cannot quietly lose its gate — the same lesson as /card above.
 app.use("/admin", [authentication, staff]);
 app.use("/storage", [authentication, staff]);
-app.use("/find", [authentication, staff]);
 
 // Routes for oauth
 import oauthRoute from "./routes/oauth.js";
@@ -102,10 +101,6 @@ app.use("/storage", storageRoute);
 
 // A customer's own binders and boxes: their half of the retire/release cycle.
 app.use("/mystorage", mystorageRoute);
-
-// Routes for locating a card in the shop
-import findRoute from "./routes/find.js";
-app.use("/find", findRoute);
 
 // 404 for anything no route matched, so the client gets JSON rather than
 // Express's HTML error page.

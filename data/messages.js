@@ -40,8 +40,11 @@ const messages = {
   STORAGE_SHOP_OWNED:
     "Este contenedor es de la tienda, no puede entregarse a un cliente.",
   STORAGE_NOT_YOURS: "Ese contenedor no es tuyo.",
+  STORAGE_NOT_SORTED: "Ese contenedor no es una caja ordenada.",
   STORAGE_CUSTOMER_OWNED:
     "Este contenedor es de un cliente; devolvéselo en vez de eliminarlo.",
+  STORAGE_EDIT_SHOP_ONLY:
+    "La tienda sólo puede agregar o quitar cartas de sus propios contenedores.",
   STORAGE_BAD_STATE: "El contenedor no puede pasar a ese estado desde el actual.",
   STORAGE_NOT_EDITABLE:
     "Sólo podés reordenar un contenedor que ya te fue entregado.",
@@ -77,6 +80,17 @@ const messages = {
     "Esta versión de la carta no existe en esa terminación.",
   MATCH_NOT_FOUND: "Esa coincidencia ya no existe.",
   MATCH_SET_ASIDE: "La carta fue apartada para el cliente.",
+  CARD_RESERVED_FOR_YOU: "La carta quedó apartada para vos.",
+  WITHDRAW_ONLY_IN_SHOP:
+    "Sólo podés pedir cartas de un contenedor que está en la tienda.",
+  WITHDRAW_REQUESTED:
+    "Pedido registrado. Te avisamos cuando esté pronta para retirar.",
+  CARD_WRONG_CONTAINER:
+    "Una carta sólo puede guardarse en un contenedor de su dueño.",
+  REFILE_CLEARED: "Listo, cartas devueltas a su lugar.",
+  PIN_REMOVED: "El precio vuelve a seguir al mercado.",
+  PAYMENT_DONE: "Pago registrado.",
+  CREDIT_NOT_YOURS: "Este pedido no tiene un cliente al que aplicarle crédito.",
   MATCH_DISMISSED: "La coincidencia fue descartada.",
   NOTIFICATION_NOT_FOUND: "Ese aviso no existe.",
   NOTIFICATION_REMOVED: "El aviso fue eliminado.",

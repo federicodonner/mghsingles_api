@@ -89,7 +89,14 @@ export async function readContents(prisma, unit, { spread } = {}) {
     base.maxPage = maxPage._max.page ?? 1;
     base.maxSpread = spreadForPage(base.maxPage);
 
-    const where = { storageid: unit.id, orderlineid: null };
+    // Filed cards only. A card with no page and no pocket is in the stand-by
+    // area, which is returned separately below — putting it in a pocket render
+    // would mean inventing a pocket for it.
+    const where = {
+      storageid: unit.id,
+      orderlineid: null,
+      page: { not: null },
+    };
     if (spread !== null && spread !== undefined) {
       base.spread = spread;
       where.page = { in: pagesInSpread(spread).filter((p) => p !== null) };
@@ -126,7 +133,18 @@ export async function readContents(prisma, unit, { spread } = {}) {
       spread !== null && spread !== undefined
         ? pagesInSpread(spread).map(renderPage)
         : [...byPage.keys()].sort((a, b) => a - b).map(renderPage);
-    base.cardcount = placements.length;
+
+    // Cards lifted out of a pocket and not yet put back. Persisted, so a
+    // half-finished sort survives a reload rather than silently refiling
+    // itself or vanishing.
+    const standby = await prisma.cardplacement.findMany({
+      where: { storageid: unit.id, orderlineid: null, page: null, pocket: null },
+      include: CARD_INCLUDE,
+      orderBy: { id: "asc" },
+    });
+    base.standby = standby.map(describePlacement);
+
+    base.cardcount = placements.length + standby.length;
     return base;
   }
 
@@ -150,9 +168,35 @@ export class ContentsError extends Error {
   }
 }
 
+// A customer's card lives in that customer's containers, full stop. The
+// shop's own furniture (no owner) holds only the shop's own stock — owner and
+// staff collections — never a customer's card: the shop displays the
+// customer's whole binder, it does not refile their cards into its own. The
+// one place a copy sits outside its owner's container is a pick-up bag, and a
+// bag is an orderline, not a container.
+async function assertOwnerMayHold(prisma, card, unit) {
+  const cardOwner = card.collection?.playerid ?? null;
+  if (unit.playerid !== null) {
+    if (unit.playerid !== cardOwner) {
+      throw new ContentsError(messages.CARD_WRONG_CONTAINER);
+    }
+    return;
+  }
+  const owner = cardOwner
+    ? await prisma.player.findUnique({
+        where: { id: cardOwner },
+        select: { role: true },
+      })
+    : null;
+  if (!owner || owner.role === "customer") {
+    throw new ContentsError(messages.CARD_WRONG_CONTAINER);
+  }
+}
+
 // Put one copy of a card into a container.
 //
-// - binder: page and pocket required; depth is assigned at the back of the stack
+// - binder: page and pocket required — or `standby: true` to leave the copy in
+//   the binder's stand-by zone (page/pocket null) to be dragged into a pocket
 // - sorted_box: sequence optional, appended to the end when omitted
 // - unsorted_box: no coordinates at all
 export async function placeCopy(prisma, unit, body) {
@@ -163,11 +207,13 @@ export async function placeCopy(prisma, unit, body) {
   });
   if (!card) throw new ContentsError(messages.CARD_NOT_FOUND, 404);
 
+  await assertOwnerMayHold(prisma, card, unit);
+
   // Validate the coordinates before allocating a copy, so a bad pocket reports
   // a bad pocket rather than whatever the copy allocator hits first.
   let page = null;
   let pocket = null;
-  if (unit.type === "binder") {
+  if (unit.type === "binder" && !body.standby) {
     page = parseInt(body.page, 10);
     pocket = parseInt(body.pocket, 10);
     if (!(page >= 1) || !(pocket >= 1 && pocket <= POCKETS_PER_PAGE)) {
@@ -204,7 +250,7 @@ export async function placeCopy(prisma, unit, body) {
 
   const data = { cardid, copyindex, storageid: unit.id };
 
-  if (unit.type === "binder") {
+  if (unit.type === "binder" && page !== null) {
     // Pockets hold several cards; the new one goes behind whatever is there.
     const deepest = await prisma.cardplacement.aggregate({
       where: { storageid: unit.id, page, pocket },
@@ -260,8 +306,114 @@ export async function removePlacement(prisma, placement) {
   });
 }
 
+// Put a copy somewhere in its binder — a pocket, or the stand-by area.
+//
+// Body: { page, pocket } to file it, or { standby: true } to lift it out.
+// One operation for both because they are the same gesture: dragging a card
+// somewhere. The stand-by area is a real position (page and pocket null), not
+// a UI holding pen, so a half-finished sort survives a reload.
+//
+// Shared by the customer (their own binders) and the shop (its furniture);
+// the caller has already checked whose binder this is and who may touch it.
+export async function setBinderPosition(prisma, placement, body) {
+  if (placement.storage.type !== "binder") {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+
+  const toStandby = body.standby === true;
+  let data;
+  if (toStandby) {
+    data = { page: null, pocket: null, depth: null, sequence: null };
+  } else {
+    const page = parseInt(body.page, 10);
+    const pocket = parseInt(body.pocket, 10);
+    if (!(page >= 1) || !(pocket >= 1 && pocket <= POCKETS_PER_PAGE)) {
+      throw new ContentsError(messages.PARAMETERS_ERROR);
+    }
+    // A pocket holds a stack, so a card dropped on an occupied one goes
+    // behind what is already there rather than displacing it.
+    const deepest = await prisma.cardplacement.aggregate({
+      where: {
+        storageid: placement.storageid,
+        page,
+        pocket,
+        NOT: { id: placement.id },
+      },
+      _max: { depth: true },
+    });
+    data = {
+      page,
+      pocket,
+      depth: (deepest._max.depth ?? 0) + 1,
+      sequence: null,
+    };
+  }
+
+  const updated = await prisma.cardplacement.update({
+    where: { id: placement.id },
+    data,
+  });
+
+  // Leaving a pocket leaves a gap in its stack.
+  if (placement.pocket !== null) {
+    await prisma.cardplacement.updateMany({
+      where: {
+        storageid: placement.storageid,
+        page: placement.page,
+        pocket: placement.pocket,
+        depth: { gt: placement.depth },
+      },
+      data: { depth: { decrement: 1 } },
+    });
+  }
+
+  return updated;
+}
+
+// Reorder a sorted box to exactly the sequence of ids given.
+//
+// The whole order rather than "move item 3 to position 7", so the result is
+// exactly what the caller sees on screen and two reorders cannot interleave
+// into a sequence nobody asked for. Ids not in this box are ignored, so a
+// stray id cannot drag a card out of another container by being listed here.
+export async function reorderSorted(prisma, unit, rawIds) {
+  if (unit.type !== "sorted_box") {
+    throw new ContentsError(messages.STORAGE_NOT_SORTED);
+  }
+
+  const ids = (rawIds ?? []).map((n) => parseInt(n, 10)).filter((n) => n > 0);
+
+  const mine = await prisma.cardplacement.findMany({
+    where: { storageid: unit.id, id: { in: ids } },
+    select: { id: true },
+  });
+  const allowed = new Set(mine.map((p) => p.id));
+
+  await prisma.$transaction(
+    ids
+      .filter((id) => allowed.has(id))
+      .map((id, index) =>
+        prisma.cardplacement.update({
+          where: { id },
+          data: { sequence: index + 1 },
+        })
+      )
+  );
+
+  return allowed.size;
+}
+
 // Move an existing placement to a new spot, in this container or another.
 export async function movePlacement(prisma, placement, unit, body) {
+  // Only when actually changing container is ownership in question.
+  if (unit.id !== placement.storageid) {
+    const card = await prisma.card.findUnique({
+      where: { id: placement.cardid },
+      include: { collection: { select: { playerid: true } } },
+    });
+    await assertOwnerMayHold(prisma, card, unit);
+  }
+
   const data = {
     storageid: unit.id,
     page: null,

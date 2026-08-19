@@ -3,6 +3,7 @@ import { Router } from "express";
 var router = Router();
 import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
+import { saleNet, saleRemaining, ZERO } from "../services/credit.js";
 
 // Get the user's sales
 router.get(
@@ -36,15 +37,25 @@ router.get(
 
     const { id, playerid, ...collectionToReturn } = collection;
 
-    // Flatten the joined lookups into the shape the UI reads.
+    // What the store still owes across all sales — also the credit this
+    // customer can spend on a purchase at the counter.
+    let pending = ZERO;
+
+    // Flatten the joined lookups into the shape the UI reads, and settle the
+    // money questions server-side so every surface shows the same cents.
     collectionToReturn.sales = sales
       .map((sale) => {
         const { cardgeneral, cardcondition, cardlanguage, ...rest } = sale;
+        const remaining = saleRemaining(sale);
+        pending = pending.add(remaining);
         return {
           ...rest,
           ...cardgeneral,
           condition: cardcondition?.name ?? null,
           language: cardlanguage?.name ?? null,
+          net: saleNet(sale).toFixed(2),
+          remaining: remaining.toFixed(2),
+          paid: remaining.lte(0),
         };
       })
       // Prisma cannot order by a joined column, so the secondary sort by card
@@ -52,6 +63,8 @@ router.get(
       .sort(
         (a, b) => b.date - a.date || (a.name ?? "").localeCompare(b.name ?? "")
       );
+
+    collectionToReturn.pending = pending.toFixed(2);
 
     res.status(200).json(collectionToReturn);
   })

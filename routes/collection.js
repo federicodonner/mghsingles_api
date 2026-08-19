@@ -58,7 +58,7 @@ router.get(
     const prisma = req.prisma;
 
     const collections = await prisma.collection.findMany({
-      select: { id: true, player: { select: { name: true } } },
+      select: { id: true, playerid: true, player: { select: { name: true } } },
       orderBy: { player: { name: "asc" } },
     });
 
@@ -67,9 +67,16 @@ router.get(
       return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
     }
 
-    res
-      .status(200)
-      .json(collections.map((c) => ({ id: c.id, name: c.player?.name ?? null })));
+    // `playerid` rides along because "who owns this" questions (assigning a
+    // container to a customer) need the player, not the collection — the two
+    // ids only happen to coincide in freshly seeded databases.
+    res.status(200).json(
+      collections.map((c) => ({
+        id: c.id,
+        playerid: c.playerid,
+        name: c.player?.name ?? null,
+      }))
+    );
   })
 );
 
