@@ -594,6 +594,97 @@ router.post(
   })
 );
 
+// Take ONE card out of a pending order, leaving the rest of the bag alone.
+//
+// The line's copies go back on sale: their placements are unlinked (each
+// still remembers its exact pocket or position), and any copy somebody had
+// physically pulled lands on the refile panel so it gets walked back to its
+// place. The order's total needs no bookkeeping — it is always computed from
+// the lines that remain. Removing the last line cancels the order outright:
+// an empty bag is not an order, it is a cancellation that went line by line.
+router.delete(
+  "/order/:orderId/line/:lineId",
+  [check("orderId").isNumeric(), check("lineId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const orderId = parseInt(req.params.orderId, 10);
+    const lineId = parseInt(req.params.lineId, 10);
+
+    const order = await prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    if (order.status !== "pending") {
+      return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
+    }
+    const line = await prisma.orderline.findFirst({
+      where: { id: lineId, orderid: orderId },
+    });
+    if (!line) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+
+    // Where the pulled copies have to go back — read before unlinking, the
+    // same order of operations as a full cancellation.
+    const placements = await prisma.cardplacement.findMany({
+      where: { orderlineid: lineId, pulled: true },
+      include: {
+        storage: { select: { id: true, name: true, type: true } },
+        card: {
+          include: { cardgeneral: { select: { name: true, cardsetcode: true } } },
+        },
+      },
+    });
+    const refile = placements.map((pl) => ({
+      placementid: pl.id,
+      cardid: pl.cardid,
+      name: pl.card?.cardgeneral?.name ?? null,
+      cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
+      storageid: pl.storage?.id ?? null,
+      storagename: pl.storage?.name ?? null,
+      storagetype: pl.storage?.type ?? null,
+      page: pl.page,
+      pocket: pl.pocket,
+      depth: pl.depth,
+      sequence: pl.sequence,
+    }));
+
+    const cancelled = await prisma.$transaction(async (tx) => {
+      await tx.cardplacement.updateMany({
+        where: { orderlineid: lineId, pulled: true },
+        data: { needsrefile: true },
+      });
+      await tx.cardplacement.updateMany({
+        where: { orderlineid: lineId },
+        data: { orderlineid: null, pulled: false },
+      });
+      await tx.orderline.delete({ where: { id: lineId } });
+
+      const remaining = await tx.orderline.count({
+        where: { orderid: orderId },
+      });
+      if (remaining === 0) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: "cancelled", closed: nowSeconds() },
+        });
+        return true;
+      }
+      return false;
+    });
+
+    return res.status(200).json({
+      message: cancelled ? messages.ORDER_CANCELLED : messages.LINE_REMOVED,
+      refile,
+      ordercancelled: cancelled,
+    });
+  })
+);
+
 // Cancel a reservation on the customer's behalf, releasing the stock.
 router.post(
   "/order/:orderId/cancel",
@@ -831,83 +922,6 @@ router.post(
 
     const bag = await openCounterBag(prisma);
     return res.status(201).json(describeOrder(bag));
-  })
-);
-
-// ---------------------------------------------------------------------------
-// The pull queue: copies reserved into a customer's bag that nobody has
-// physically taken out of their container yet. A storefront buy bags the copy
-// instantly — the reservation is real from that second — but the card is
-// still sitting in its pocket, and this list is what sends a person to get it.
-// ---------------------------------------------------------------------------
-
-router.get(
-  "/pulls",
-  asyncHandler(async (req, res) => {
-    const prisma = req.prisma;
-    await releaseExpiredOrders(prisma);
-
-    const placements = await prisma.cardplacement.findMany({
-      where: {
-        orderlineid: { not: null },
-        pulled: false,
-        orderline: { order: { status: "pending" } },
-      },
-      include: {
-        storage: { select: { id: true, name: true, type: true } },
-        card: {
-          include: {
-            cardgeneral: { select: { name: true, cardsetcode: true } },
-          },
-        },
-        orderline: {
-          include: {
-            order: {
-              select: { id: true, player: { select: { name: true } } },
-            },
-          },
-        },
-      },
-      orderBy: [{ storageid: "asc" }, { page: "asc" }, { sequence: "asc" }],
-    });
-
-    return res.status(200).json(
-      placements.map((pl) => ({
-        placementid: pl.id,
-        cardid: pl.cardid,
-        name: pl.card?.cardgeneral?.name ?? null,
-        cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
-        // Whose bag it goes into — the counter's, when nobody is behind it.
-        customer: pl.orderline?.order?.player?.name ?? null,
-        storageid: pl.storage?.id ?? null,
-        storagename: pl.storage?.name ?? null,
-        storagetype: pl.storage?.type ?? null,
-        page: pl.page,
-        pocket: pl.pocket,
-        depth: pl.depth,
-        sequence: pl.sequence,
-      }))
-    );
-  })
-);
-
-// The cards listed are physically in their customers' bags now.
-router.post(
-  "/pulls/done",
-  asyncHandler(async (req, res) => {
-    const prisma = req.prisma;
-    const ids = Array.isArray(req.body.placementids)
-      ? req.body.placementids.map((v) => parseInt(v, 10)).filter(Number.isInteger)
-      : [];
-    if (!ids.length) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-    await prisma.cardplacement.updateMany({
-      // Guarded on the link so a stray id cannot mark a shelved copy pulled.
-      where: { id: { in: ids }, orderlineid: { not: null }, pulled: false },
-      data: { pulled: true },
-    });
-    return res.status(200).json({ message: messages.PULLS_DONE });
   })
 );
 

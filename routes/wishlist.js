@@ -35,11 +35,7 @@ const readStrings = (v) => readList(v, (x) => String(x).trim());
 import { DEFAULT_FINISH } from "../services/finishes.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
-import {
-  setAsideMatch,
-  raisePinnedMatch,
-  MatchError,
-} from "../services/matches.js";
+import { raisePinnedMatch } from "../services/matches.js";
 
 // Does this card satisfy the entry? Each category is checked independently and
 // an empty list is a wildcard.
@@ -353,17 +349,14 @@ router.post(
     }
 
     // The pinned entry and its match — exactly what the next matcher run
-    // would have raised for this copy.
-    const match = await raisePinnedMatch(prisma, playerId, card);
-
-    try {
-      await setAsideMatch(prisma, match.id);
-    } catch (err) {
-      if (err instanceof MatchError) {
-        return res.status(err.status).json({ message: err.message });
-      }
-      throw err;
-    }
+    // would have raised for this copy. And that is ALL a buy does: the match
+    // lands on the shop's "Cartas para apartar" queue, where a person picks
+    // which physical copy to pull (the card may live in several containers)
+    // and bags it. Bagging here instead skipped that step — the reservation
+    // existed but nobody was told to walk to the shelf, and when the card had
+    // several copies the system picked one arbitrarily. Asking again bumps
+    // the wanted quantity: a second buy means a second copy.
+    await raisePinnedMatch(prisma, playerId, card, { bumpWanted: true });
 
     return res.status(201).json({ message: messages.CARD_RESERVED_FOR_YOU });
   })

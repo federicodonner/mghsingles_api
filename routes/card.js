@@ -210,9 +210,12 @@ async function getSingleCardPrice(card) {
 // the autocomplete has the exact name, and "Fog" by substring drags in Aven
 // Fogbringer and friends. `set=` narrows to printings whose set name or code
 // contains the text, for filtering as the user types.
+// No .escape() on the name: it HTML-escaped the value before the lookup, so
+// "Fire // Ice" became "Fire &#x2F;&#x2F; Ice" and split cards (and anything
+// with an apostrophe) could never match. Prisma parameterizes the query;
+// there is nothing to escape against.
 router.get(
   "/versions/:cardName",
-  [check("cardName").escape()],
   asyncHandler(async (req, res) => {
     // Loads the data into a variable
     let cardName = req.params.cardName;

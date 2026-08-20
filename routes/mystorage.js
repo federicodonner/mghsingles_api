@@ -80,36 +80,69 @@ function handle(err, res) {
 // --------------------------------------------------------------------------
 
 // Every container this customer owns, wherever it is in its lifecycle.
+//
+// `q` filters by name and `page`/`limit` page the result (response becomes
+// `{ units, total }`); without `page` the plain array comes back as always,
+// so nothing that already consumes this endpoint breaks.
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     const playerId = requirePlayerId(req);
 
-    const units = await req.prisma.storage.findMany({
-      where: { playerid: playerId },
-      include: {
-        // Copies in a pick-up bag are not physically in the container, so they
-        // must not be counted as being in it — the contents view already
-        // excludes them, and a count that disagreed would look like lost cards.
-        _count: { select: { cardplacement: { where: { orderlineid: null } } } },
-      },
-      orderBy: [{ name: "asc" }],
+    const q = String(req.query.q ?? "").trim();
+    let where = { playerid: playerId };
+    if (q) {
+      // Accent-insensitive, same trick as the shop's list: the diacritics are
+      // stripped on both sides before comparing.
+      const folded =
+        "%" +
+        q.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "") +
+        "%";
+      const hits = await req.prisma.$queryRaw`
+        SELECT id FROM storage
+        WHERE playerid = ${playerId}
+          AND translate(lower(name), 'áéíóúüñ', 'aeiouun') LIKE ${folded}`;
+      where = { playerid: playerId, id: { in: hits.map((h) => h.id) } };
+    }
+
+    const paged = req.query.page !== undefined;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+    const [units, total] = await Promise.all([
+      req.prisma.storage.findMany({
+        where,
+        include: {
+          // Copies in a pick-up bag are not physically in the container, so
+          // they must not be counted as being in it — the contents view
+          // already excludes them, and a count that disagreed would look like
+          // lost cards.
+          _count: {
+            select: { cardplacement: { where: { orderlineid: null } } },
+          },
+        },
+        orderBy: [{ name: "asc" }],
+        ...(paged ? { skip: (page - 1) * limit, take: limit } : {}),
+      }),
+      paged ? req.prisma.storage.count({ where }) : Promise.resolve(0),
+    ]);
+
+    const shaped = (u) => ({
+      id: u.id,
+      name: u.name,
+      type: u.type,
+      state: u.state,
+      forsale: u.state === "for_sale",
+      cardcount: u._count.cardplacement,
+      editable: customerCanEdit(u.state),
+      // What the customer may do with it next, so the UI does not have to
+      // reimplement the state machine to decide which buttons to draw.
+      cando: STATES.filter((to) => customerCanMove(u.state, to)),
     });
 
-    return res.status(200).json(
-      units.map((u) => ({
-        id: u.id,
-        name: u.name,
-        type: u.type,
-        state: u.state,
-        forsale: u.state === "for_sale",
-        cardcount: u._count.cardplacement,
-        editable: customerCanEdit(u.state),
-        // What the customer may do with it next, so the UI does not have to
-        // reimplement the state machine to decide which buttons to draw.
-        cando: STATES.filter((to) => customerCanMove(u.state, to)),
-      }))
-    );
+    return res
+      .status(200)
+      .json(paged ? { units: units.map(shaped), total } : units.map(shaped));
   })
 );
 

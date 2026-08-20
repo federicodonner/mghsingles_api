@@ -70,6 +70,7 @@ const messages = {
   ORDER_NOT_ENOUGH_STOCK:
     "No hay stock suficiente de una de las cartas para reservarla.",
   ORDER_CANCELLED: "El pedido fue cancelado y las cartas quedaron disponibles.",
+  LINE_REMOVED: "La carta fue quitada del pedido y volvió a estar disponible.",
   ORDER_COMPLETED: "El pedido fue entregado y cobrado.",
   ORDER_HANDED_OVER: "Las cartas fueron entregadas a su dueño.",
   CARD_NOT_AVAILABLE: "Esta carta no está a la venta.",
@@ -80,7 +81,8 @@ const messages = {
     "Esta versión de la carta no existe en esa terminación.",
   MATCH_NOT_FOUND: "Esa coincidencia ya no existe.",
   MATCH_SET_ASIDE: "La carta fue apartada para el cliente.",
-  CARD_RESERVED_FOR_YOU: "La carta quedó apartada para vos.",
+  CARD_RESERVED_FOR_YOU:
+    "Pedida. Te avisamos cuando esté apartada para que la retires.",
   WITHDRAW_ONLY_IN_SHOP:
     "Sólo podés pedir cartas de un contenedor que está en la tienda.",
   WITHDRAW_REQUESTED:
@@ -88,7 +90,6 @@ const messages = {
   CARD_WRONG_CONTAINER:
     "Una carta sólo puede guardarse en un contenedor de su dueño.",
   REFILE_CLEARED: "Listo, cartas devueltas a su lugar.",
-  PULLS_DONE: "Listo, cartas en sus bolsas.",
   PIN_REMOVED: "El precio vuelve a seguir al mercado.",
   PAYMENT_DONE: "Pago registrado.",
   CREDIT_NOT_YOURS: "Este pedido no tiene un cliente al que aplicarle crédito.",

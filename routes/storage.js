@@ -54,25 +54,68 @@ const STATE_MESSAGE = {
 // Storage CRUD
 // --------------------------------------------------------------------------
 
-// List every storage unit with a count of what is in it.
+// List storage units with a count of what is in them.
+//
+// `q` filters by container or owner name, `sort`/`dir` order by either, and
+// `page`/`limit` page the result — a shop with a wall of binders should not
+// pull every one of them on each visit. With `page` present the response is
+// `{ units, total }`; without it the whole (filtered, sorted) array comes
+// back as it always did, so older callers keep working.
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     const prisma = req.prisma;
 
-    const units = await prisma.storage.findMany({
-      include: {
-        player: { select: { id: true, name: true } },
-      // Copies in a pick-up bag are not physically in the container, so they
-      // must not be counted as being in it — the contents view already excludes
-      // them, and a count that disagreed would look like lost cards.
-      _count: { select: { cardplacement: { where: { orderlineid: null } } } },
-      },
-      orderBy: [{ playerid: "asc" }, { name: "asc" }],
-    });
+    const q = String(req.query.q ?? "").trim();
+    let where = {};
+    if (q) {
+      // Accent-insensitive: "martin" has to find Martín. Prisma's
+      // `insensitive` folds case only, so the candidate ids come from SQL
+      // that strips the Spanish diacritics on both sides.
+      const folded =
+        "%" +
+        q.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "") +
+        "%";
+      const hits = await prisma.$queryRaw`
+        SELECT s.id FROM storage s
+        LEFT JOIN player p ON p.id = s.playerid
+        WHERE translate(lower(s.name), 'áéíóúüñ', 'aeiouun') LIKE ${folded}
+           OR translate(lower(coalesce(p.name, '')), 'áéíóúüñ', 'aeiouun') LIKE ${folded}`;
+      where = { id: { in: hits.map((h) => h.id) } };
+    }
 
-    return res.status(200).json(
-      units.map((u) => ({
+    const dir = req.query.dir === "desc" ? "desc" : "asc";
+    const orderBy =
+      req.query.sort === "owner"
+        ? [{ player: { name: dir } }, { name: "asc" }]
+        : req.query.sort === "name"
+          ? [{ name: dir }]
+          : [{ playerid: "asc" }, { name: "asc" }];
+
+    const paged = req.query.page !== undefined;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 25, 1), 200);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+
+    const [units, total] = await Promise.all([
+      prisma.storage.findMany({
+        where,
+        include: {
+          player: { select: { id: true, name: true } },
+          // Copies in a pick-up bag are not physically in the container, so
+          // they must not be counted as being in it — the contents view
+          // already excludes them, and a count that disagreed would look
+          // like lost cards.
+          _count: {
+            select: { cardplacement: { where: { orderlineid: null } } },
+          },
+        },
+        orderBy,
+        ...(paged ? { skip: (page - 1) * limit, take: limit } : {}),
+      }),
+      paged ? prisma.storage.count({ where }) : Promise.resolve(0),
+    ]);
+
+    const shaped = (u) => ({
         id: u.id,
         name: u.name,
         type: u.type,
@@ -92,8 +135,11 @@ router.get(
         // A customer's container is never the shop's to delete — see the
         // DELETE route. The UI reads this rather than re-deriving the rule.
         deletable: u.playerid === null && u.state !== "released",
-      }))
-    );
+    });
+
+    return res
+      .status(200)
+      .json(paged ? { units: units.map(shaped), total } : units.map(shaped));
   })
 );
 
@@ -548,13 +594,16 @@ router.put(
   })
 );
 
-// Add one copy of a printing to one of the shop's containers.
+// Add one copy of a printing to a container the shop holds.
 //
-// The card lands in the CALLING staff member's active collection: shop stock
-// is the owner's and staff's collections (see assertOwnerMayHold), and the
-// person at the counter adding a card is recording their own stock. Same
-// landing rules as the customer's add — a binder's copy goes to stand-by, a
-// sorted box's to the front.
+// Whose collection the card lands in follows whose container it is. The
+// shop's own furniture takes the CALLING staff member's stock (shop stock is
+// the owner's and staff's collections — see assertOwnerMayHold). A customer's
+// container held by the shop takes the CUSTOMER's cards: them walking in with
+// five more cards for their consigned binder is the everyday case, and
+// cycling the whole container home and back just to add them was theatre.
+// Same landing rules as the customer's add — a binder's copy goes to
+// stand-by, a sorted box's to the front.
 router.post(
   "/:storageId/add",
   [check("storageId").isNumeric(), check("scryfallid").trim().notEmpty()],
@@ -574,7 +623,9 @@ router.post(
     }
 
     try {
-      assertShopOwned(unit);
+      // Physically held is the bar (for_sale or retired) — recording a card
+      // into a binder in the customer's living room would be fiction.
+      assertShopMayArrange(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
       const conditionid = parseInt(req.body.conditionid, 10);
@@ -599,7 +650,7 @@ router.post(
       }
 
       const collection = await prisma.collection.findFirst({
-        where: { playerid: playerId, active: true },
+        where: { playerid: unit.playerid ?? playerId, active: true },
         select: { id: true },
       });
       if (!collection) {
@@ -620,8 +671,11 @@ router.post(
   })
 );
 
-// Throw away whatever is left in a shop binder's stand-by area — called when
+// Throw away whatever is left in a binder's stand-by area — called when
 // staff finish editing with cards taken out of pockets and never put back.
+// Same bar as adding: whatever the shop physically holds, it can tidy up —
+// including discarding a card it just added to a customer's binder by
+// mistake, which is the mirror of being allowed to add it.
 router.post(
   "/:storageId/discard-standby",
   [check("storageId").isNumeric()],
@@ -639,7 +693,7 @@ router.post(
     }
 
     try {
-      assertShopOwned(unit);
+      assertShopMayArrange(unit);
       const removed = await discardStandby(req.prisma, unit.id);
       return res.status(200).json({ removed });
     } catch (err) {

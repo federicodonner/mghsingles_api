@@ -9,6 +9,13 @@
 // It also means a connection URL alone is no longer enough: somebody has to
 // construct the pool, so the TLS decision that was implicit is now explicit and
 // lives here.
+// Loaded here, not only in the npm scripts' `-r dotenv/config` preloads:
+// every entrypoint that builds a client needs DATABASE_URL, and a bare
+// `node scripts/whatever.mjs` without the preload used to connect silently
+// to the OS user's default database and report missing tables. In production
+// there is no .env file and this is a no-op — the config vars are already in
+// the environment.
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
