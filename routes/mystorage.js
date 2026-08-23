@@ -28,6 +28,8 @@ import {
   reorderSorted,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
+import { defaultIdentity } from "../services/identity.js";
+import { importManaBox } from "../services/manabox.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
   removeCopy,
@@ -516,6 +518,53 @@ router.delete(
 // Add one copy of a printing to this container.
 //
 // Creating the card and placing a copy are one action here, not two calls, so
+// Import a ManaBox scan into this container. Body: { csv } — the app's CSV
+// export, verbatim. Editable containers only, same as /add; the per-row
+// semantics (binder pockets, empty lines, condition/language kept
+// faithfully) live in services/manabox.js.
+router.post(
+  "/:storageId/import",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty() || typeof req.body.csv !== "string") {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    try {
+      const unit = await ownUnit(
+        prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+
+      const collection = await prisma.collection.findFirst({
+        where: { playerid: playerId, active: true },
+        select: { id: true },
+      });
+      if (!collection) {
+        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+      }
+
+      const result = await importManaBox(
+        prisma,
+        unit,
+        collection.id,
+        req.body.csv
+      );
+      if (result.badFile) {
+        return res.status(400).json({ message: messages.MANABOX_BAD_FILE });
+      }
+      return res.status(200).json(result);
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
 // there is no instant where a card exists with nowhere to be. Always exactly
 // one copy: wanting three is three uses of duplicate, which is also how the
 // stand-by area works.
@@ -546,8 +595,14 @@ router.post(
       assertEditable(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
-      const conditionid = parseInt(req.body.conditionid, 10);
-      const languageid = parseInt(req.body.languageid, 10);
+      // The UI no longer asks for condition or language — a manual add is
+      // assumed NM English. Explicit values (a future ManaBox import) still
+      // land as sent; the columns keep being tracked either way.
+      const assumed = await defaultIdentity(prisma);
+      const conditionid =
+        parseInt(req.body.conditionid, 10) || assumed.conditionid;
+      const languageid =
+        parseInt(req.body.languageid, 10) || assumed.languageid;
       const variant = String(req.body.variant ?? DEFAULT_FINISH).trim();
 
       const printing = await prisma.cardgeneral.findUnique({

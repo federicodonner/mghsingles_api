@@ -19,6 +19,7 @@ import {
   ZERO as CREDIT_ZERO,
 } from "../services/credit.js";
 import { applyReferencePrices } from "../services/pricing.js";
+import { exchangeRate, setExchangeRate, toPesos } from "../services/exchange.js";
 import {
   describeLocation,
   sortLocations,
@@ -426,6 +427,7 @@ function describeOrder(order) {
       cardid: line.cardid,
       quantity: line.quantity,
       price: line.price,
+      pricepesos: line.pricepesos,
       kind: line.kind,
       name: line.card?.cardgeneral?.name ?? null,
       cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
@@ -440,7 +442,22 @@ function describeOrder(order) {
       .filter((line) => line.kind !== "withdrawal")
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
+    totalpesos: totalPesosOf(order),
   };
+}
+
+// The peso total only exists when EVERY charged line carries a peso snapshot:
+// a part-dollar, part-peso sum would read as the whole order and undercharge.
+// Older orders (from before the rate existed) therefore show dollars only.
+function totalPesosOf(order) {
+  const charged = order.orderline.filter((line) => line.kind !== "withdrawal");
+  if (!charged.length || charged.some((line) => line.pricepesos == null)) {
+    return null;
+  }
+  return charged.reduce(
+    (sum, line) => sum + Number(line.pricepesos) * line.quantity,
+    0
+  );
 }
 
 // The shop's queue. `?status=` filters; pending first by default.
@@ -549,6 +566,8 @@ router.post(
             card: line.card,
             quantity: line.quantity,
             price: Number(line.price),
+            // The frozen commission base (a floored rare's real price).
+            baseprice: line.baseprice != null ? Number(line.baseprice) : null,
             date: today,
             placementIds,
           });
@@ -885,6 +904,8 @@ router.post(
             cardid: card.id,
             quantity: 1,
             price: card.price ?? 0,
+            pricepesos: toPesos(card.price ?? 0, await exchangeRate(tx)),
+            baseprice: card.baseprice ?? null,
             kind: "purchase",
           },
         });
@@ -1339,6 +1360,24 @@ router.get(
 // Pricing policy
 // --------------------------------------------------------------------------
 
+// The pesos-per-dollar exchange rate, maintained by hand on the Precios page.
+// Setting it only changes what is shown and what FUTURE bags snapshot; peso
+// amounts already frozen on order lines keep the rate of their day.
+//
+// Body: { rate } — a positive number.
+router.put(
+  "/exchangerate",
+  owner,
+  asyncHandler(async (req, res) => {
+    const rate = Number(req.body.rate);
+    if (!Number.isFinite(rate) || rate <= 0) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    await setExchangeRate(req.prisma, rate);
+    return res.status(200).json({ rate: await exchangeRate(req.prisma) });
+  })
+);
+
 // The condition multipliers. CardKingdom quotes the NM price, so these are what
 // turn it into a price for every other grade.
 router.get(
@@ -1428,6 +1467,9 @@ router.put(
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
       data.price = req.body.price === null ? null : Number(req.body.price);
+      // A hand-set price IS the real price; a stale floor base must not keep
+      // deciding the consignor's share.
+      data.baseprice = null;
       data.priceupdate = now;
     }
     if (req.body.buyprice !== undefined) {

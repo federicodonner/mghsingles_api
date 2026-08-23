@@ -9,6 +9,7 @@ import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
 import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { applyFixedPrice, applyReferencePrices } from "../services/pricing.js";
+import { defaultIdentity } from "../services/identity.js";
 import {
   PAPER_ONLY,
   PAPER_SETS_ONLY,
@@ -477,8 +478,8 @@ router.post(
     authentication,
     check("scryfallId").escape().exists(),
     check("quantity").isNumeric().isFloat({ min: 1 }),
-    check("condition").isNumeric().exists(),
-    check("language").isNumeric().exists(),
+    check("condition").optional().isNumeric(),
+    check("language").optional().isNumeric(),
     check("variant").optional().escape(),
     check("collectionId").isNumeric(),
   ],
@@ -498,8 +499,12 @@ router.post(
     const scryfallid = req.body.scryfallId;
     // Round the quantity in case the use sends a fraction
     const quantity = Math.floor(req.body.quantity);
-    const conditionid = parseInt(req.body.condition);
-    const languageid = parseInt(req.body.language);
+    // The UI no longer asks for condition or language — a manual add is
+    // assumed NM English. Explicit values (a future ManaBox import) still
+    // land as sent; the columns keep being tracked either way.
+    const assumed = await defaultIdentity(req.prisma);
+    const conditionid = parseInt(req.body.condition) || assumed.conditionid;
+    const languageid = parseInt(req.body.language) || assumed.languageid;
     // `variant` is a finish name, not a number — parseInt on it yielded NaN and
     // Prisma rejected the write.
     const variant = req.body.variant

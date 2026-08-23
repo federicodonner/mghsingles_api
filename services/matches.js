@@ -13,6 +13,7 @@ import {
   releaseExpiredOrders,
 } from "./orders.js";
 import { availabilityFor, availableOf } from "./availability.js";
+import { exchangeRate, toPesos } from "./exchange.js";
 
 export class MatchError extends Error {
   constructor(message, status = 400) {
@@ -161,8 +162,14 @@ export async function setAsideMatch(prisma, matchId, placementid, { pulled = fal
     }
 
     // A withdrawal is the customer's own card, so it is priced at zero:
-    // nothing is owed for taking it home.
+    // nothing is owed for taking it home. The peso side is frozen alongside
+    // the dollar one, at the exchange rate of the day the copy is bagged.
     const price = match.kind === "withdrawal" ? 0 : match.card?.price ?? 0;
+    const pricepesos = toPesos(price, await exchangeRate(tx));
+    // The commission base rides along: a floored rare pays its consignor
+    // from the real price, frozen with the quote.
+    const baseprice =
+      match.kind === "withdrawal" ? null : match.card?.baseprice ?? null;
 
     const line = await tx.orderline.findFirst({
       where: { orderid: bag.id, cardid: match.cardid },
@@ -181,6 +188,8 @@ export async function setAsideMatch(prisma, matchId, placementid, { pulled = fal
           cardid: match.cardid,
           quantity: 1,
           price,
+          pricepesos,
+          baseprice,
           kind: match.kind,
         },
       });

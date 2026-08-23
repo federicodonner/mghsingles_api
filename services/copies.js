@@ -159,7 +159,9 @@ export async function addPrintingCopy(
   prisma,
   unit,
   collectionid,
-  { scryfallid, conditionid, languageid, variant }
+  // `sortedEnd` sends a sorted box's copy to the BACK instead of the front —
+  // an import reads a file in order, so appending is what keeps that order.
+  { scryfallid, conditionid, languageid, variant, sortedEnd = false }
 ) {
   return prisma.$transaction(async (tx) => {
     // Same printing, grade, language and finish is the same card row with
@@ -211,12 +213,22 @@ export async function addPrintingCopy(
     };
 
     if (unit.type === "sorted_box") {
-      // To the front, and everything else shifts back.
-      await tx.cardplacement.updateMany({
-        where: { storageid: unit.id },
-        data: { sequence: { increment: 1 } },
-      });
-      data.sequence = 1;
+      if (sortedEnd) {
+        // To the back, behind everything already filed.
+        const last = await tx.cardplacement.aggregate({
+          where: { storageid: unit.id },
+          _max: { sequence: true },
+        });
+        data.sequence = (last._max.sequence ?? 0) + 1;
+      } else {
+        // To the front, and everything else shifts back — a hand-added card
+        // is the one you are holding.
+        await tx.cardplacement.updateMany({
+          where: { storageid: unit.id },
+          data: { sequence: { increment: 1 } },
+        });
+        data.sequence = 1;
+      }
     }
     // A binder gets STANDBY_WHERE by omission — page and pocket stay null,
     // which IS the stand-by area. An unsorted box has no positions at all.

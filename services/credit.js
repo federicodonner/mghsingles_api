@@ -18,8 +18,14 @@ const round2 = (value) =>
   new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
 // The consignor's share of one sale.
+//
+// Computed from `baseprice` — the card's REAL price — when the customer was
+// charged more than that (the $1 floor on cheap rares). The consignor's cut
+// follows the market value of their card; the uplift is the store's.
 export function saleNet(sale) {
-  const lineTotal = new Decimal(sale.price).mul(sale.quantity);
+  const lineTotal = new Decimal(sale.baseprice ?? sale.price).mul(
+    sale.quantity
+  );
   return lineTotal.sub(round2(lineTotal.mul(sale.percent)));
 }
 
@@ -33,7 +39,13 @@ export function saleRemaining(sale) {
 export async function creditFor(db, collectionid) {
   const sales = await db.sale.findMany({
     where: { collectionid },
-    select: { price: true, percent: true, quantity: true, paidamount: true },
+    select: {
+      price: true,
+      baseprice: true,
+      percent: true,
+      quantity: true,
+      paidamount: true,
+    },
   });
   return sales.reduce((sum, sale) => sum.add(saleRemaining(sale)), ZERO);
 }

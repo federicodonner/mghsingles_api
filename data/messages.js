@@ -58,6 +58,8 @@ const messages = {
   CARD_NOT_YOURS: "Esa carta no es tuya.",
   CARD_DIGITAL_ONLY:
     "Esa versión sólo existe en formato digital (Arena o MTGO), no se puede vender en la tienda.",
+  MANABOX_BAD_FILE:
+    "Ese archivo no parece una exportación de ManaBox (falta la cabecera).",
   PLACEMENT_COMMITTED:
     "Esa copia está apartada para un pedido, no se puede mover hasta entregarla.",
   COPY_ALREADY_PLACED: "Esa copia ya está guardada en un contenedor.",

@@ -17,6 +17,7 @@ import {
   nowSeconds,
 } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
+import { exchangeRate, toPesos } from "../services/exchange.js";
 
 const LINE_INCLUDE = {
   card: {
@@ -41,6 +42,7 @@ function describeOrder(order) {
       cardid: line.cardid,
       quantity: line.quantity,
       price: line.price,
+      pricepesos: line.pricepesos,
       kind: line.kind,
       name: line.card?.cardgeneral?.name ?? null,
       cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
@@ -56,7 +58,22 @@ function describeOrder(order) {
       .filter((line) => line.kind !== "withdrawal")
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
+    totalpesos: totalPesosOf(order),
   };
+}
+
+// The peso total only exists when EVERY charged line carries a peso snapshot:
+// a part-dollar, part-peso sum would read as the whole order and undercharge.
+// Older orders (from before the rate existed) therefore show dollars only.
+function totalPesosOf(order) {
+  const charged = order.orderline.filter((line) => line.kind !== "withdrawal");
+  if (!charged.length || charged.some((line) => line.pricepesos == null)) {
+    return null;
+  }
+  return charged.reduce(
+    (sum, line) => sum + Number(line.pricepesos) * line.quantity,
+    0
+  );
 }
 
 // The customer's own orders, newest first.
@@ -148,6 +165,7 @@ router.post(
 
     // Create the order and its lines together: a half-written order would hold
     // stock for cards the customer never sees.
+    const rate = await exchangeRate(prisma);
     const order = await prisma.$transaction(async (tx) => {
       const created = await tx.order.create({
         data: {
@@ -163,8 +181,13 @@ router.post(
           cardid: Number(line.cardid),
           quantity: Number(line.quantity),
           // Price is captured now, so a later reprice cannot change what was
-          // quoted. Cards with no price recorded reserve at zero.
+          // quoted. Cards with no price recorded reserve at zero. The peso
+          // side is frozen the same way, at today's exchange rate.
           price: byId.get(Number(line.cardid)).price ?? 0,
+          pricepesos: toPesos(byId.get(Number(line.cardid)).price ?? 0, rate),
+          // The commission base rides along too: a floored rare pays its
+          // consignor from the real price, frozen with the quote.
+          baseprice: byId.get(Number(line.cardid)).baseprice ?? null,
         })),
       });
       return tx.order.findUnique({

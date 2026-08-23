@@ -28,7 +28,9 @@ app.all("*", (req, res, next) => {
 });
 
 // parse application/json
-app.use(json());
+// 2mb instead of the 100kb default: a ManaBox CSV of a large binder is a few
+// hundred KB, and it arrives as one JSON field.
+app.use(json({ limit: "2mb" }));
 
 // Middleware for authentication
 import { authentication, staff } from "./middleware/authentication.js";

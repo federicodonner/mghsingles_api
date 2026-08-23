@@ -27,6 +27,45 @@ function toCents(value) {
     : new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
+// Sell prices land on 5-cent steps, rounded UP: $4.12 sells at $4.15. Buy
+// prices stay at plain cents — rounding what the shop PAYS upward would be a
+// policy nobody asked for.
+function toNickel(value) {
+  // decimal.js calls it ROUND_CEIL — an unknown constant here would silently
+  // fall back to nearest, which rounds $4.12 DOWN to $4.10.
+  return new Prisma.Decimal(value)
+    .mul(20)
+    .toDecimalPlaces(0, Prisma.Decimal.ROUND_CEIL)
+    .div(20)
+    .toDecimalPlaces(2);
+}
+
+// What a card with no reference price sells for, by rarity. CardKingdom
+// simply has no listing for much of the long tail, and "no price" at the
+// counter means the card cannot be rung up at all.
+const DEFAULT_SELL = { common: "0.35", uncommon: "0.50" };
+
+const ONE_DOLLAR = new Prisma.Decimal(1);
+
+// Cheap rares and mythics sell at a $1 minimum. The card's REAL price rides
+// along in `baseprice` because the consignor's share is computed from it —
+// the uplift to $1 is the store's, not the consignor's.
+const FLOORED_RARITIES = new Set(["rare", "mythic"]);
+
+function sellPricesFor(derived, rarity) {
+  if (FLOORED_RARITIES.has(rarity) && derived.lt(ONE_DOLLAR)) {
+    return { price: ONE_DOLLAR, baseprice: derived };
+  }
+  return { price: derived, baseprice: null };
+}
+
+// Decimal-or-null equality, for deciding whether a row actually changed.
+function sameMoney(a, b) {
+  if (a === null || a === undefined) return b === null || b === undefined;
+  if (b === null || b === undefined) return false;
+  return new Prisma.Decimal(a).equals(b);
+}
+
 // Stamp a printing's pinned price onto one stock row, if the printing has one.
 //
 // Called where card rows are BORN (adding to a collection, adding a copy to a
@@ -45,6 +84,8 @@ export async function applyFixedPrice(db, card) {
   const data = {};
   if (pin.price !== null) {
     data.price = pin.price;
+    // A hand-set price IS the real price — no floor uplift to account for.
+    data.baseprice = null;
     data.pricelocked = true;
     data.priceupdate = now;
   }
@@ -73,12 +114,11 @@ export async function applyReferencePrices(
       scryfallid: true,
       variant: true,
       price: true,
+      baseprice: true,
       buyprice: true,
       pricelocked: true,
       buypricelocked: true,
-      cardcondition: {
-        select: { sellmultiplier: true, buymultiplier: true },
-      },
+      cardgeneral: { select: { rarity: true } },
     },
   });
   if (!cards.length) return { considered: 0, sell: 0, buy: 0, locked: 0, noReference: 0 };
@@ -94,6 +134,16 @@ export async function applyReferencePrices(
     references.map((r) => [`${r.scryfallid}:${r.finish}`, r])
   );
 
+  // Every card prices as if near-mint (2026-08-23): the shop stopped showing
+  // condition, so a played copy must not undercut the NM price it is listed
+  // at. The rows still RECORD their real grade — only pricing ignores it.
+  const nm = await prisma.cardcondition.findFirst({
+    where: { name: "NM" },
+    select: { sellmultiplier: true, buymultiplier: true },
+  });
+  const sellMultiplier = nm?.sellmultiplier ?? new Prisma.Decimal(1);
+  const buyMultiplier = nm?.buymultiplier ?? new Prisma.Decimal(1);
+
   const now = Math.round(Date.now() / 1000);
   let sell = 0;
   let buy = 0;
@@ -102,28 +152,41 @@ export async function applyReferencePrices(
   const updates = [];
 
   for (const card of cards) {
-    const reference = referenceFor.get(`${card.scryfallid}:${card.variant}`);
-    if (!reference) {
-      noReference++;
-      continue;
-    }
+    // No `continue` on a missing reference: a common or uncommon the source
+    // has never listed still gets its default sell price below.
+    const reference =
+      referenceFor.get(`${card.scryfallid}:${card.variant}`) ?? null;
+    if (!reference) noReference++;
 
     const data = {};
+    const rarity = card.cardgeneral?.rarity ?? null;
 
     // Rule 1 and 3: each side is considered on its own, and a locked side is
     // skipped without affecting the other.
     if (card.pricelocked) {
       locked++;
-    } else if (reference.retail !== null) {
-      const next = toCents(
-        reference.retail.mul(card.cardcondition.sellmultiplier)
-      );
-      // Rule 2 is implicit here: a null retail simply never reaches this
-      // branch, so whatever the card already had survives.
-      if (!card.price || !next.equals(card.price)) {
-        data.price = next;
-        data.priceupdate = now;
-        sell++;
+    } else {
+      // The market-derived price, on a 5-cent step. When the source has
+      // nothing (rule 2: never CLEAR a price), a card that has no price at
+      // all still gets the rarity default — 35c commons, 50c uncommons —
+      // because "no price" means it cannot be rung up.
+      const derived =
+        reference?.retail != null
+          ? toNickel(reference.retail.mul(sellMultiplier))
+          : card.price == null && DEFAULT_SELL[rarity]
+            ? new Prisma.Decimal(DEFAULT_SELL[rarity])
+            : null;
+      if (derived !== null) {
+        const next = sellPricesFor(derived, rarity);
+        if (
+          !sameMoney(card.price, next.price) ||
+          !sameMoney(card.baseprice, next.baseprice)
+        ) {
+          data.price = next.price;
+          data.baseprice = next.baseprice;
+          data.priceupdate = now;
+          sell++;
+        }
       }
     }
 
@@ -131,10 +194,8 @@ export async function applyReferencePrices(
       // Counted once per card, not once per side, so the number reads as
       // "cards the shop has pinned".
       if (!card.pricelocked) locked++;
-    } else if (reference.buylist !== null) {
-      const next = toCents(
-        reference.buylist.mul(card.cardcondition.buymultiplier)
-      );
+    } else if (reference && reference.buylist !== null) {
+      const next = toCents(reference.buylist.mul(buyMultiplier));
       if (!card.buyprice || !next.equals(card.buyprice)) {
         data.buyprice = next;
         data.buypriceupdate = now;
@@ -172,7 +233,12 @@ export async function applyReferencePrices(
     if (pin.price !== null) {
       const { count } = await prisma.card.updateMany({
         where: { ...rowScope, scryfallid: pin.scryfallid, pricelocked: false },
-        data: { price: pin.price, pricelocked: true, priceupdate: now },
+        data: {
+          price: pin.price,
+          baseprice: null,
+          pricelocked: true,
+          priceupdate: now,
+        },
       });
       pinned += count;
     }

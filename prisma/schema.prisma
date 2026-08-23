@@ -36,6 +36,11 @@ model card {
   /// CardKingdom retail reference times the condition's sell multiplier, unless
   /// `pricelocked` is set.
   price         Decimal?       @db.Decimal(10, 2)
+  /// The market-derived price BEFORE selling rules moved it — today only the
+  /// $1 floor on cheap rares. Null means `price` was not adjusted. Consignor
+  /// commission is computed from this; the uplift belongs to the store.
+  /// Cleared whenever a human sets the price by hand (pin or manual edit).
+  baseprice     Decimal?       @db.Decimal(10, 2)
   /// What the shop PAYS for one — derived from CardKingdom's buylist. Tracked
   /// separately from `price` because they move independently and the shop edits
   /// them independently.
@@ -209,6 +214,10 @@ model sale {
   collectionid  Int
   scryfallid    String
   price         Decimal       @db.Decimal(10, 2)
+  /// The real per-unit price the consignor's share is computed from, when the
+  /// customer was charged more than the card's market price (the $1 rare
+  /// floor). Null means `price` is also the commission base.
+  baseprice     Decimal?      @db.Decimal(10, 2)
   percent       Decimal       @db.Decimal(5, 4)
   quantity      Int
   date          Int
@@ -341,6 +350,15 @@ model orderline {
   cardid   Int
   quantity Int
   price    Decimal @db.Decimal(10, 2)
+  /// The same quote in pesos, at the exchange rate of the day the copy was
+  /// bagged. Null on lines from before the shop had an exchange rate (or when
+  /// none was configured), which the UIs read as "nothing to show".
+  pricepesos Decimal? @db.Decimal(12, 2)
+  /// The card's REAL (market-derived) price when `price` was raised by a
+  /// selling rule — today the $1 floor on cheap rares. The consignor's share
+  /// is computed from this, not from what the customer was charged; the
+  /// difference is the store's. Null means `price` IS the real price.
+  baseprice Decimal? @db.Decimal(10, 2)
   /// `purchase` is an ordinary sale. `withdrawal` is a customer collecting a
   /// card out of their OWN consigned collection: it leaves stock, but no money
   /// changes hands and no sale row is written, because there is nobody to pay.
@@ -525,6 +543,14 @@ model fixedprice {
   buyprice    Decimal?    @db.Decimal(10, 2)
   updated     Int
   cardgeneral cardgeneral @relation(fields: [scryfallid], references: [scryfallid], onDelete: Cascade, onUpdate: NoAction, map: "fixedprice_cardgeneral")
+}
+
+/// Shop-wide knobs with exactly one value, keyed by name — today just
+/// `exchangerate`, the pesos-per-dollar rate the owner maintains. A key-value
+/// table instead of a one-column table so the next knob needs no migration.
+model setting {
+  key   String @id @db.VarChar(64)
+  value String
 }
 
 enum playerrole {

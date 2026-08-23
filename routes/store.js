@@ -14,6 +14,7 @@ import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
+import { exchangeRate } from "../services/exchange.js";
 
 const PAGE_SIZE = 24;
 
@@ -227,6 +228,17 @@ router.get(
       truncated: matches.length >= MAX_MATCHES,
       cards: sellable.slice(start, start + PAGE_SIZE),
     });
+  })
+);
+
+// The pesos-per-dollar rate, for showing peso prices next to dollar ones.
+// Public like the rest of the storefront: the rate hangs on the shop's wall
+// anyway. `null` means the shop has not configured one, and the UIs then show
+// dollars only.
+router.get(
+  "/exchangerate",
+  asyncHandler(async (req, res) => {
+    return res.status(200).json({ rate: await exchangeRate(req.prisma) });
   })
 );
 

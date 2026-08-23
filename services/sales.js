@@ -11,13 +11,20 @@ import { isFoil } from "./finishes.js";
 // `card` must have been loaded with its `collection`, since the commission rate
 // lives there and is captured onto the sale — repricing a collection later must
 // not rewrite what past sales owed.
-export async function recordSale(tx, { card, quantity, price, date, placementIds }) {
+export async function recordSale(
+  tx,
+  { card, quantity, price, baseprice = null, date, placementIds }
+) {
   await tx.sale.create({
     data: {
       collectionid: card.collectionid,
       scryfallid: card.scryfallid,
       // Per unit, matching sale.price elsewhere.
       price,
+      // The real per-unit price the consignor's share is computed from, when
+      // `price` was raised by a selling rule (the $1 rare floor). Null means
+      // price is also the commission base.
+      baseprice,
       percent: card.collection?.percent ?? 0,
       quantity,
       date,
