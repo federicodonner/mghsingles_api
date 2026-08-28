@@ -98,6 +98,63 @@ export async function applyFixedPrice(db, card) {
   return db.card.update({ where: { id: card.id }, data });
 }
 
+// The shop's would-be SELL price for each of a list of printings — what a
+// copy will cost once it is on the shelf, whether or not one exists today.
+// Same rules as applyReferencePrices: a pin wins outright; otherwise the NM
+// reference on a 5-cent step, rarity defaults for the unlisted long tail,
+// and the $1 floor on cheap rares and mythics. Used by browsing surfaces
+// (the wishlist's version picker) that quote printings, not stock rows.
+//
+// `printings` need scryfallid, rarity and finishes; the price quoted is for
+// the printing's FIRST finish, which is nonfoil whenever nonfoil exists.
+// Returns a Map scryfallid -> Decimal price (or null when unpriceable).
+export async function quotePrintings(prisma, printings) {
+  const ids = [
+    ...new Set(printings.map((p) => p.scryfallid).filter(Boolean)),
+  ];
+  if (!ids.length) return new Map();
+
+  const [nm, references, pins] = await Promise.all([
+    prisma.cardcondition.findFirst({
+      where: { name: "NM" },
+      select: { sellmultiplier: true },
+    }),
+    prisma.cardprice.findMany({
+      where: { source: SOURCE, scryfallid: { in: ids } },
+      select: { scryfallid: true, finish: true, retail: true },
+    }),
+    prisma.fixedprice.findMany({ where: { scryfallid: { in: ids } } }),
+  ]);
+  const sellMultiplier = nm?.sellmultiplier ?? new Prisma.Decimal(1);
+  const referenceFor = new Map(
+    references.map((r) => [`${r.scryfallid}:${r.finish}`, r])
+  );
+  const pinFor = new Map(pins.map((p) => [p.scryfallid, p]));
+
+  const quotes = new Map();
+  for (const printing of printings) {
+    const pin = pinFor.get(printing.scryfallid);
+    if (pin?.price != null) {
+      quotes.set(printing.scryfallid, pin.price);
+      continue;
+    }
+    const finish = (printing.finishes ?? [])[0] ?? "nonfoil";
+    const reference = referenceFor.get(`${printing.scryfallid}:${finish}`);
+    const rarity = printing.rarity ?? null;
+    const derived =
+      reference?.retail != null
+        ? toNickel(reference.retail.mul(sellMultiplier))
+        : DEFAULT_SELL[rarity]
+          ? new Prisma.Decimal(DEFAULT_SELL[rarity])
+          : null;
+    quotes.set(
+      printing.scryfallid,
+      derived === null ? null : sellPricesFor(derived, rarity).price
+    );
+  }
+  return quotes;
+}
+
 // Recompute stock prices from the stored references.
 //
 // `onlyCardIds` limits the work to specific rows, which is what the

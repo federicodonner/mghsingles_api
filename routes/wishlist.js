@@ -18,6 +18,7 @@ import { Router } from "express";
 var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
+import { quotePrintings } from "../services/pricing.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 
 // Normalise a constraint list from the request: unique, right type, and an
@@ -206,11 +207,22 @@ router.get(
         releasedatyear: true,
         // Which finishes THIS printing exists in, so the picker can say so.
         finishes: true,
+        rarity: true,
       },
       orderBy: [{ releasedatyear: "asc" }, { cardsetcode: "asc" }],
     });
 
-    return res.status(200).json(versions);
+    // What each printing would cost at this shop — the full selling rules
+    // (pins, NM reference, defaults, the $1 floor on cheap rares), so the
+    // picker quotes the same number a copy will carry when it arrives.
+    const quotes = await quotePrintings(prisma, versions);
+
+    return res.status(200).json(
+      versions.map(({ rarity, ...version }) => ({
+        ...version,
+        price: quotes.get(version.scryfallid) ?? null,
+      }))
+    );
   })
 );
 
