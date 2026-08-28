@@ -38,6 +38,7 @@ import {
   duplicateCopy,
   discardStandby,
   addPrintingCopy,
+  changePrintingCopy,
 } from "../services/copies.js";
 import { raisePinnedMatch } from "../services/matches.js";
 
@@ -759,6 +760,60 @@ router.put(
 // For someone who owns three of a printing and wants them in three pockets:
 // add it once, duplicate twice, drag each into place — rather than searching
 // out the same printing three times.
+// Change ONE copy into another printing or finish of the same card. The
+// placement keeps its exact spot; only the copy's identity moves. Body:
+// { scryfallid, variant }. Same bar as duplicate/remove: it changes the
+// collection, so only while the container is in the owner's hands.
+router.put(
+  "/placement/:placementId/version",
+  [check("placementId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+
+    const placement = await req.prisma.cardplacement.findUnique({
+      where: { id: parseInt(req.params.placementId, 10) },
+      include: { storage: true },
+    });
+    if (!placement || placement.storage.playerid !== playerId) {
+      return res.status(404).json({ message: messages.PLACEMENT_NOT_FOUND });
+    }
+    if (placement.orderlineid !== null) {
+      return res.status(400).json({ message: messages.PLACEMENT_COMMITTED });
+    }
+    try {
+      assertEditable(placement.storage);
+      const scryfallid = String(req.body.scryfallid ?? "").trim();
+      const variant = String(req.body.variant ?? "").trim();
+      const printing = await req.prisma.cardgeneral.findUnique({
+        where: { scryfallid },
+      });
+      if (!printing) {
+        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+      if (!isPaperPrinting(printing)) {
+        return res.status(400).json({ message: messages.CARD_DIGITAL_ONLY });
+      }
+      if (!finishesFor(printing).includes(variant)) {
+        return res.status(400).json({
+          message: messages.FINISH_NOT_AVAILABLE,
+          finishes: finishesFor(printing),
+        });
+      }
+      const moved = await changePrintingCopy(req.prisma, placement, {
+        scryfallid,
+        variant,
+      });
+      return res.status(200).json(moved);
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
 router.post(
   "/placement/:placementId/duplicate",
   [check("placementId").isNumeric()],

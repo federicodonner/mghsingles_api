@@ -44,6 +44,7 @@ export function describePlacement(placement) {
   return {
     placementid: pl.id,
     cardid: pl.cardid,
+    scryfallid: card?.scryfallid ?? null,
     copyindex: pl.copyindex,
     page: pl.page,
     pocket: pl.pocket,

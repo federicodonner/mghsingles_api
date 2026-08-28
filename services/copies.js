@@ -118,6 +118,79 @@ export async function duplicateCopy(prisma, placement) {
   });
 }
 
+// Turn ONE copy into a different printing (or finish) of the same card.
+//
+// The placement stays exactly where it is — same pocket, depth or sequence —
+// only its identity moves: the copy leaves its card row and joins (or
+// creates) the row for the chosen printing, keeping its condition and
+// language. The freshly created row is priced on the spot, the same as any
+// other birth. Choosing the version the copy already is returns unchanged.
+export async function changePrintingCopy(prisma, placement, { scryfallid, variant }) {
+  return prisma.$transaction(async (tx) => {
+    const source = await tx.card.findUnique({
+      where: { id: placement.cardid },
+      include: { _count: { select: { cardplacement: true } } },
+    });
+    if (!source) throw new ContentsError(messages.CARD_NOT_FOUND, 404);
+    if (source.scryfallid === scryfallid && source.variant === variant) {
+      return placement;
+    }
+
+    // The copy's new home: same collection, condition and language, the
+    // chosen printing and finish. Same-identity rows merge, as everywhere.
+    const existing = await tx.card.findFirst({
+      where: {
+        collectionid: source.collectionid,
+        scryfallid,
+        conditionid: source.conditionid,
+        languageid: source.languageid,
+        variant,
+      },
+    });
+    const target =
+      existing ??
+      (await tx.card.create({
+        data: {
+          collectionid: source.collectionid,
+          scryfallid,
+          conditionid: source.conditionid,
+          languageid: source.languageid,
+          variant,
+          quantity: 0,
+        },
+      }));
+    if (!existing) {
+      await applyFixedPrice(tx, target);
+      await applyReferencePrices(tx, { onlyCardIds: [target.id] });
+    }
+
+    const highest = await tx.cardplacement.aggregate({
+      where: { cardid: target.id },
+      _max: { copyindex: true },
+    });
+    const moved = await tx.cardplacement.update({
+      where: { id: placement.id },
+      data: { cardid: target.id, copyindex: (highest._max.copyindex ?? 0) + 1 },
+    });
+    await tx.card.update({
+      where: { id: target.id },
+      data: { quantity: { increment: 1 } },
+    });
+
+    // Shrink the row the copy left; the last copy takes the row with it.
+    if (source._count.cardplacement <= 1) {
+      await tx.card.delete({ where: { id: source.id } });
+    } else {
+      await tx.card.update({
+        where: { id: source.id },
+        data: { quantity: source._count.cardplacement - 1 },
+      });
+    }
+
+    return moved;
+  });
+}
+
 // Throw away everything left in a binder's stand-by area.
 //
 // Called when the customer finishes editing. Cards left here were taken out of
