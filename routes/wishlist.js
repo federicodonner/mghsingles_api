@@ -19,6 +19,7 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import { quotePrintings } from "../services/pricing.js";
+import { moxfieldDeckId, fetchMoxfieldDeck } from "../services/moxfield.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 
 // Normalise a constraint list from the request: unique, right type, and an
@@ -249,6 +250,81 @@ function union(current, incoming) {
 }
 
 // Add a card name to the wishlist, optionally constrained from the start.
+// Import a public Moxfield deck into the wishlist. Body: { url } — the
+// deck's URL (or bare public id). Every card the deck needs (commanders,
+// mainboard, sideboard) becomes a wishlist entry with NO preferences — the
+// customer refines versions and finishes afterwards if they care. Names
+// already on the list are left alone (an import must not widen or reset
+// what somebody already tuned), and names the catalogue does not know are
+// reported back instead of silently dropped.
+router.post(
+  "/import-moxfield",
+  asyncHandler(async (req, res) => {
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const deckId = moxfieldDeckId(req.body.url);
+    if (!deckId) {
+      return res.status(400).json({ message: messages.MOXFIELD_BAD_URL });
+    }
+
+    let deck;
+    try {
+      deck = await fetchMoxfieldDeck(deckId);
+    } catch (err) {
+      return res.status(502).json({ message: messages.MOXFIELD_ERROR });
+    }
+    if (deck.status === 404) {
+      return res.status(404).json({ message: messages.MOXFIELD_NOT_FOUND });
+    }
+    if (deck.status !== 200) {
+      return res.status(502).json({ message: messages.MOXFIELD_ERROR });
+    }
+
+    let added = 0;
+    let existing = 0;
+    const notfound = [];
+    for (const { name, quantity } of deck.cards) {
+      // Same bar as a manual add: only names the catalogue knows, stored in
+      // Scryfall's spelling.
+      const known = await prisma.cardgeneral.findFirst({
+        where: { name: { equals: name, mode: "insensitive" } },
+        select: { name: true },
+      });
+      if (!known) {
+        notfound.push(name);
+        continue;
+      }
+      const already = await prisma.wishlist.findFirst({
+        where: {
+          playerid: playerId,
+          name: { equals: known.name, mode: "insensitive" },
+        },
+        select: { id: true },
+      });
+      if (already) {
+        existing++;
+        continue;
+      }
+      await prisma.wishlist.create({
+        data: {
+          playerid: playerId,
+          name: known.name,
+          created: Math.round(Date.now() / 1000),
+          quantity: readQuantity(quantity),
+          versions: [],
+          languageids: [],
+          conditionids: [],
+          variants: [],
+        },
+      });
+      added++;
+    }
+
+    return res.status(200).json({ added, existing, notfound });
+  })
+);
+
 router.post(
   "/",
   [check("name").trim().notEmpty()],

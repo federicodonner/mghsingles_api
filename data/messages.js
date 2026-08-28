@@ -60,6 +60,12 @@ const messages = {
   CARD_NOT_YOURS: "Esa carta no es tuya.",
   CARD_DIGITAL_ONLY:
     "Esa versión sólo existe en formato digital (Arena o MTGO), no se puede vender en la tienda.",
+  MOXFIELD_BAD_URL:
+    "Eso no parece un link de un mazo de Moxfield.",
+  MOXFIELD_NOT_FOUND:
+    "No se encontró el mazo. Verificá el link y que el mazo sea público.",
+  MOXFIELD_ERROR:
+    "No se pudo leer el mazo de Moxfield, intentá de nuevo más tarde.",
   MANABOX_BAD_FILE:
     "Ese archivo no parece una exportación de ManaBox (falta la cabecera).",
   PLACEMENT_COMMITTED:
