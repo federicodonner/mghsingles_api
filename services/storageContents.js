@@ -193,6 +193,102 @@ async function assertOwnerMayHold(prisma, card, unit) {
   }
 }
 
+// Slide every card on one binder page a pocket ahead or back.
+//
+// The stack in the edge pocket has nowhere to go, so it is kicked to the
+// stand-by area — really (page null on the server), because the shift is a
+// persisted rearrangement and the kicked card needs a new pocket anyway.
+// A page holding a copy that is set aside for an order refuses to shift:
+// somebody may be walking to its recorded coordinates right now, same rule
+// as moving that copy directly.
+export async function shiftBinderPage(prisma, unit, page, direction) {
+  const ahead = direction === "ahead";
+  if (
+    unit.type !== "binder" ||
+    !(page >= 1) ||
+    (!ahead && direction !== "back")
+  ) {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+
+  const committed = await prisma.cardplacement.findFirst({
+    where: { storageid: unit.id, page, orderlineid: { not: null } },
+    select: { id: true },
+  });
+  if (committed) {
+    throw new ContentsError(messages.PLACEMENT_COMMITTED);
+  }
+
+  const edge = ahead ? POCKETS_PER_PAGE : 1;
+  // Kick first: the kicked rows lose their page, so the blanket move below
+  // cannot touch them. Stacks travel whole — depth within a pocket is kept.
+  await prisma.$transaction([
+    prisma.cardplacement.updateMany({
+      where: { storageid: unit.id, page, pocket: edge },
+      data: { page: null, pocket: null, depth: null },
+    }),
+    prisma.cardplacement.updateMany({
+      where: {
+        storageid: unit.id,
+        page,
+        pocket: ahead ? { lt: edge } : { gt: edge },
+      },
+      data: { pocket: ahead ? { increment: 1 } : { decrement: 1 } },
+    }),
+  ]);
+}
+
+// Reorder the stack inside one binder pocket.
+//
+// `placementids` is the pocket's visible stack in its new order, front first —
+// depth 1 is the card you SEE in the pocket. Copies set aside for an order are
+// not offered in the dialog and cannot be reordered; they keep their relative
+// order behind the visible stack, so their depths stay meaningful without ever
+// colliding.
+export async function reorderPocketStack(prisma, unit, page, pocket, placementids) {
+  if (
+    unit.type !== "binder" ||
+    !(page >= 1) ||
+    !(pocket >= 1 && pocket <= POCKETS_PER_PAGE) ||
+    !Array.isArray(placementids)
+  ) {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+
+  const inPocket = await prisma.cardplacement.findMany({
+    where: { storageid: unit.id, page, pocket },
+  });
+  const visible = inPocket.filter((pl) => pl.orderlineid === null);
+  const ids = placementids.map((id) => parseInt(id, 10));
+  const visibleIds = new Set(visible.map((pl) => pl.id));
+  // The new order must be exactly the visible stack — nothing missing,
+  // nothing foreign — or a stale dialog could scramble a pocket it is not
+  // looking at.
+  if (
+    ids.length !== visible.length ||
+    new Set(ids).size !== ids.length ||
+    !ids.every((id) => visibleIds.has(id))
+  ) {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+
+  const bagged = inPocket
+    .filter((pl) => pl.orderlineid !== null)
+    .sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
+
+  await prisma.$transaction([
+    ...ids.map((id, i) =>
+      prisma.cardplacement.update({ where: { id }, data: { depth: i + 1 } })
+    ),
+    ...bagged.map((pl, i) =>
+      prisma.cardplacement.update({
+        where: { id: pl.id },
+        data: { depth: ids.length + i + 1 },
+      })
+    ),
+  ]);
+}
+
 // Put one copy of a card into a container.
 //
 // - binder: page and pocket required — or `standby: true` to leave the copy in

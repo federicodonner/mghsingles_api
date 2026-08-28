@@ -189,9 +189,13 @@ model payment {
 
 model player {
   id           Int          @id @default(autoincrement())
-  username     String
+  /// Unique — one account per handle. The register route also refuses
+  /// case-insensitive lookalikes before this constraint ever fires.
+  username     String       @unique
   name         String
-  email        String
+  /// Unique, stored lowercased (the routes normalise on write), so the
+  /// constraint IS case-insensitive in practice. Also a login identifier.
+  email        String       @unique
   /// What this account may do. Replaces the old `superuser` boolean, which
   /// could not express the difference between someone who works the counter
   /// and someone who signs the payouts.

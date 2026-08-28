@@ -9,6 +9,8 @@ const messages = {
     "El nombre de usuario seleccionado no es correcto, por favor seleccione otro.",
   USERNAME_REPEAT:
     "El nombre de usuario seleccionado ya está en uso, por favor seleccione otro.",
+  EMAIL_REPEAT:
+    "Ese email ya está registrado. Si la cuenta es tuya, ingresá con él.",
   EMAIL_ERROR: "El email no tiene formato correcto.",
   USERNAME_CORRECT: "El nombre de usuario seleccionado es correcto.",
   COLLECTION_PROBLEM:

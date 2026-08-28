@@ -6,21 +6,34 @@ import messages from "../data/messages.js";
 import asyncHandler from "../middleware/asyncHandler.js";
 import { generateToken } from "../utils/utils.js";
 
-// Validate the user and return the token
+// Validate the user and return the token.
+//
+// The `username` field accepts the account's username OR its email — people
+// remember one or the other, and both are unique on the player table. Case
+// does not matter for either: nobody should be locked out over a shift key.
 router.post("/", asyncHandler(async (req, res) => {
   // Loads the data into variables to use
-  var username = req.body.username;
+  var identifier = String(req.body.username ?? "").trim();
   var password = req.body.password;
 
   // Validates that all the compulsory fields are present
-  if (!username || !password) {
+  if (!identifier || !password) {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
   }
 
   // Gets prisma from the middleware
   const prisma = req.prisma;
 
-  const player = await prisma.player.findFirst({ where: { username } });
+  // Username first, then email — checked separately rather than with one OR,
+  // so an account whose username happens to look like someone ELSE's email
+  // can never answer for the wrong person.
+  const player =
+    (await prisma.player.findFirst({
+      where: { username: { equals: identifier, mode: "insensitive" } },
+    })) ??
+    (await prisma.player.findFirst({
+      where: { email: { equals: identifier, mode: "insensitive" } },
+    }));
 
   // Verifies that the user exists
   if (!player) {

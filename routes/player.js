@@ -28,7 +28,7 @@ router.post(
       }
     }
     // Loads the data into variables to use
-    var username = req.body.username;
+    var username = String(req.body.username ?? "").trim();
     var name = req.body.name;
     var email = req.body.email.toLowerCase();
     var password = req.body.password;
@@ -46,11 +46,24 @@ router.post(
     // Gets prisma from middleware
     const prisma = req.prisma;
     try {
-      // Verifies that the username is not already in use
-      const existingUser = await prisma.player.findFirst({ where: { email } });
-
-      if (existingUser) {
+      // Both identifiers must be free, and each refusal names the field: a
+      // person who owns the email already has an account and should log in;
+      // a person whose username is taken just picks another. Checked
+      // case-insensitively — "Ana" and "ana" would be indistinguishable at
+      // the counter. The @unique constraints below catch any race.
+      const usernameTaken = await prisma.player.findFirst({
+        where: { username: { equals: username, mode: "insensitive" } },
+        select: { id: true },
+      });
+      if (usernameTaken) {
         return res.status(400).json({ message: messages.USERNAME_REPEAT });
+      }
+      const emailTaken = await prisma.player.findFirst({
+        where: { email: { equals: email, mode: "insensitive" } },
+        select: { id: true },
+      });
+      if (emailTaken) {
+        return res.status(400).json({ message: messages.EMAIL_REPEAT });
       }
 
       // Hash the password
@@ -75,6 +88,16 @@ router.post(
       // Add the generated token to the response
       res.status(201).send({ token });
     } catch (e) {
+      // Two registrations racing past the checks above land here: the unique
+      // constraint rejects the loser, and the target says which field to blame.
+      if (e?.code === "P2002") {
+        const target = String(e.meta?.target ?? "");
+        return res.status(400).json({
+          message: target.includes("email")
+            ? messages.EMAIL_REPEAT
+            : messages.USERNAME_REPEAT,
+        });
+      }
       console.log(e);
       return res.status(400).json({ error: e });
     }
@@ -117,13 +140,35 @@ router.put(
     if (name) data.name = name;
     if (email) data.email = email.toLowerCase();
 
-    const updated = await req.prisma.player.update({
-      where: { id: playerId },
-      data,
-      select: { id: true, username: true, name: true, email: true },
-    });
+    // A changed email must not collide with anybody else's — email is unique
+    // and doubles as a login identifier.
+    if (data.email) {
+      const emailTaken = await req.prisma.player.findFirst({
+        where: {
+          email: { equals: data.email, mode: "insensitive" },
+          NOT: { id: playerId },
+        },
+        select: { id: true },
+      });
+      if (emailTaken) {
+        return res.status(400).json({ message: messages.EMAIL_REPEAT });
+      }
+    }
 
-    return res.status(200).json(updated);
+    try {
+      const updated = await req.prisma.player.update({
+        where: { id: playerId },
+        data,
+        select: { id: true, username: true, name: true, email: true },
+      });
+      return res.status(200).json(updated);
+    } catch (e) {
+      // The unique constraint catches a race past the check above.
+      if (e?.code === "P2002") {
+        return res.status(400).json({ message: messages.EMAIL_REPEAT });
+      }
+      throw e;
+    }
   })
 );
 

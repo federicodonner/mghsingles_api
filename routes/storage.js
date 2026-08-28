@@ -30,6 +30,8 @@ import {
   movePlacement,
   setBinderPosition,
   reorderSorted,
+  shiftBinderPage,
+  reorderPocketStack,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { defaultIdentity } from "../services/identity.js";
@@ -598,6 +600,73 @@ router.put(
 
 // Add one copy of a printing to a container the shop holds.
 //
+// Reorder the stack inside one pocket. Body: { page, pocket,
+// placementids } — the visible stack in its new order, front (the card you
+// see) first. Same arranging gate as any other move.
+router.put(
+  "/:storageId/pocket/order",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    try {
+      const unit = await prisma.storage.findUnique({
+        where: { id: parseInt(req.params.storageId, 10) },
+      });
+      if (!unit) {
+        return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+      }
+      assertShopMayArrange(unit);
+      await reorderPocketStack(
+        prisma,
+        unit,
+        parseInt(req.body.page, 10),
+        parseInt(req.body.pocket, 10),
+        req.body.placementids
+      );
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Slide every card on one binder page a pocket ahead or back. The stack in
+// the edge pocket is kicked to the stand-by area. Body: { direction } —
+// "ahead" or "back". Physically held is the bar, like any other arranging.
+router.post(
+  "/:storageId/page/:page/shift",
+  [check("storageId").isNumeric(), check("page").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const unit = await prisma.storage.findUnique({
+      where: { id: parseInt(req.params.storageId, 10) },
+    });
+    if (!unit) {
+      return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+    }
+    try {
+      assertShopMayArrange(unit);
+      await shiftBinderPage(
+        prisma,
+        unit,
+        parseInt(req.params.page, 10),
+        String(req.body.direction ?? "")
+      );
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
 // Import a ManaBox scan into this container. Body: { csv } — the app's CSV
 // export, verbatim. Same possession and ownership rules as /add below; the
 // per-row semantics (binder pockets, empty lines, condition/language kept

@@ -26,6 +26,8 @@ import {
   movePlacement,
   setBinderPosition,
   reorderSorted,
+  shiftBinderPage,
+  reorderPocketStack,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { defaultIdentity } from "../services/identity.js";
@@ -651,6 +653,73 @@ router.post(
 // One endpoint for both because they are the same gesture: dragging a card
 // somewhere. The stand-by area is a real position (page and pocket null), not a
 // UI holding pen, so a half-finished sort survives a reload.
+// Reorder the stack inside one pocket. Body: { page, pocket,
+// placementids } — the visible stack in its new order, front (the card you
+// see) first. Same arranging gate as any other move.
+router.put(
+  "/:storageId/pocket/order",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+    try {
+      const unit = await ownUnit(
+        prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+      await reorderPocketStack(
+        prisma,
+        unit,
+        parseInt(req.body.page, 10),
+        parseInt(req.body.pocket, 10),
+        req.body.placementids
+      );
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Slide every card on one binder page a pocket ahead or back. The stack in
+// the edge pocket is kicked to the stand-by area. Body: { direction } —
+// "ahead" or "back". Editable containers only, like any other move.
+router.post(
+  "/:storageId/page/:page/shift",
+  [check("storageId").isNumeric(), check("page").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+    try {
+      const unit = await ownUnit(
+        prisma,
+        playerId,
+        parseInt(req.params.storageId, 10)
+      );
+      assertEditable(unit);
+      await shiftBinderPage(
+        prisma,
+        unit,
+        parseInt(req.params.page, 10),
+        String(req.body.direction ?? "")
+      );
+      return res.status(200).json({ ok: true });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
 router.put(
   "/placement/:placementId/position",
   [check("placementId").isNumeric()],
