@@ -687,8 +687,9 @@ router.put(
   })
 );
 
-// Slide every card on one binder page a pocket ahead or back. The stack in
-// the edge pocket is kicked to the stand-by area. Body: { direction } —
+// Slide the cards from one pocket onward a space ahead or back on their
+// page; an edge stack is kicked to the stand-by area. Body: { frompocket,
+// direction } —
 // "ahead" or "back". Editable containers only, like any other move.
 router.post(
   "/:storageId/page/:page/shift",
@@ -711,6 +712,7 @@ router.post(
         prisma,
         unit,
         parseInt(req.params.page, 10),
+        parseInt(req.body.frompocket, 10),
         String(req.body.direction ?? "")
       );
       return res.status(200).json({ ok: true });

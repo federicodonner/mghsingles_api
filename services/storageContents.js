@@ -193,49 +193,99 @@ async function assertOwnerMayHold(prisma, card, unit) {
   }
 }
 
-// Slide every card on one binder page a pocket ahead or back.
+// Slide the cards FROM one pocket onward a space ahead or back on their page.
 //
-// The stack in the edge pocket has nowhere to go, so it is kicked to the
-// stand-by area — really (page null on the server), because the shift is a
-// persisted rearrangement and the kicked card needs a new pocket anyway.
-// A page holding a copy that is set aside for an order refuses to shift:
-// somebody may be walking to its recorded coordinates right now, same rule
-// as moving that copy directly.
-export async function shiftBinderPage(prisma, unit, page, direction) {
+// The hovered card is the leader: "ahead" pushes it and everything after it
+// on the page one pocket forward — making room where it stood — and "back"
+// pulls them all one pocket toward the front. A stack pushed past the last
+// pocket (or pulled out of the first) has nowhere to go, so it is kicked to
+// the stand-by area — really (page null on the server), because the shift is
+// a persisted rearrangement and the kicked card needs a new pocket anyway.
+// Pulling back INTO an occupied pocket stacks behind what is already there,
+// the same way a dragged card lands on an occupied pocket.
+//
+// A copy in the affected range that is set aside for an order refuses the
+// shift: somebody may be walking to its recorded coordinates right now, same
+// rule as moving that copy directly.
+export async function shiftBinderPage(prisma, unit, page, fromPocket, direction) {
   const ahead = direction === "ahead";
   if (
     unit.type !== "binder" ||
     !(page >= 1) ||
+    !(fromPocket >= 1 && fromPocket <= POCKETS_PER_PAGE) ||
     (!ahead && direction !== "back")
   ) {
     throw new ContentsError(messages.PARAMETERS_ERROR);
   }
 
   const committed = await prisma.cardplacement.findFirst({
-    where: { storageid: unit.id, page, orderlineid: { not: null } },
+    where: {
+      storageid: unit.id,
+      page,
+      pocket: { gte: fromPocket },
+      orderlineid: { not: null },
+    },
     select: { id: true },
   });
   if (committed) {
     throw new ContentsError(messages.PLACEMENT_COMMITTED);
   }
 
-  const edge = ahead ? POCKETS_PER_PAGE : 1;
-  // Kick first: the kicked rows lose their page, so the blanket move below
-  // cannot touch them. Stacks travel whole — depth within a pocket is kept.
-  await prisma.$transaction([
-    prisma.cardplacement.updateMany({
-      where: { storageid: unit.id, page, pocket: edge },
-      data: { page: null, pocket: null, depth: null },
-    }),
-    prisma.cardplacement.updateMany({
-      where: {
-        storageid: unit.id,
-        page,
-        pocket: ahead ? { lt: edge } : { gt: edge },
-      },
-      data: { pocket: ahead ? { increment: 1 } : { decrement: 1 } },
-    }),
-  ]);
+  const ops = [];
+  if (ahead) {
+    // Kick first: the kicked rows lose their page, so the blanket move
+    // below cannot touch them. Every other move lands in a pocket its own
+    // occupant is vacating, so nothing merges. Stacks travel whole.
+    ops.push(
+      prisma.cardplacement.updateMany({
+        where: { storageid: unit.id, page, pocket: POCKETS_PER_PAGE },
+        data: { page: null, pocket: null, depth: null },
+      }),
+      prisma.cardplacement.updateMany({
+        where: {
+          storageid: unit.id,
+          page,
+          pocket: { gte: fromPocket, lt: POCKETS_PER_PAGE },
+        },
+        data: { pocket: { increment: 1 } },
+      })
+    );
+  } else if (fromPocket === 1) {
+    ops.push(
+      prisma.cardplacement.updateMany({
+        where: { storageid: unit.id, page, pocket: 1 },
+        data: { page: null, pocket: null, depth: null },
+      }),
+      prisma.cardplacement.updateMany({
+        where: { storageid: unit.id, page, pocket: { gt: 1 } },
+        data: { pocket: { decrement: 1 } },
+      })
+    );
+  } else {
+    // The leader lands in a pocket that is NOT vacating — it may be
+    // occupied. Stack behind its occupants: bump the incoming depths past
+    // the deepest card already there, then move.
+    const deepest = await prisma.cardplacement.aggregate({
+      where: { storageid: unit.id, page, pocket: fromPocket - 1 },
+      _max: { depth: true },
+    });
+    const behind = deepest._max.depth ?? 0;
+    if (behind > 0) {
+      ops.push(
+        prisma.cardplacement.updateMany({
+          where: { storageid: unit.id, page, pocket: fromPocket },
+          data: { depth: { increment: behind } },
+        })
+      );
+    }
+    ops.push(
+      prisma.cardplacement.updateMany({
+        where: { storageid: unit.id, page, pocket: { gte: fromPocket } },
+        data: { pocket: { decrement: 1 } },
+      })
+    );
+  }
+  await prisma.$transaction(ops);
 }
 
 // Reorder the stack inside one binder pocket.
