@@ -105,13 +105,27 @@ router.post(
     const prisma = req.prisma;
     const lines = req.body.lines;
 
-    if (!Array.isArray(lines) || !lines.length) {
+    // Bounds on the request itself: a real order names a handful of cards, and
+    // each line a handful of copies. Without caps a single request could name
+    // an order line per card in the shop, or a quantity that later drives a
+    // per-copy loop — both denial-of-service levers.
+    const MAX_LINES = 200;
+    const MAX_LINE_QTY = 40;
+    if (!Array.isArray(lines) || !lines.length || lines.length > MAX_LINES) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
-    const wellFormed = lines.every(
-      (line) =>
-        Number.isInteger(Number(line.cardid)) && Number(line.quantity) >= 1
-    );
+    const wellFormed = lines.every((line) => {
+      const cardid = Number(line.cardid);
+      const quantity = Number(line.quantity);
+      return (
+        Number.isInteger(cardid) &&
+        cardid > 0 &&
+        cardid <= 2147483647 &&
+        Number.isInteger(quantity) &&
+        quantity >= 1 &&
+        quantity <= MAX_LINE_QTY
+      );
+    });
     if (!wellFormed) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }

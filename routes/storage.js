@@ -45,6 +45,7 @@ import {
   changePrintingCopy,
 } from "../services/copies.js";
 import { requirePlayerId } from "../middleware/asyncHandler.js";
+import { storeName } from "../services/locations.js";
 
 const TYPES = ["binder", "sorted_box", "unsorted_box"];
 
@@ -85,6 +86,7 @@ router.get(
         SELECT s.id FROM storage s
         LEFT JOIN player p ON p.id = s.playerid
         WHERE translate(lower(s.name), 'áéíóúüñ', 'aeiouun') LIKE ${folded}
+           OR translate(lower(coalesce(s.storename, '')), 'áéíóúüñ', 'aeiouun') LIKE ${folded}
            OR translate(lower(coalesce(p.name, '')), 'áéíóúüñ', 'aeiouun') LIKE ${folded}`;
       where = { id: { in: hits.map((h) => h.id) } };
     }
@@ -122,7 +124,8 @@ router.get(
 
     const shaped = (u) => ({
         id: u.id,
-        name: u.name,
+        // The store's label; the owner column beside it says whose it is.
+        name: storeName(u),
         type: u.type,
         state: u.state,
         forsale: u.state === "for_sale",
@@ -201,14 +204,21 @@ router.put(
 
     const data = {};
     if (typeof req.body.name === "string" && req.body.name.trim()) {
-      data.name = req.body.name.trim();
+      // The store renames its OWN label. For a customer's container that is
+      // `storename` — the owner's `name` is theirs and never touched from
+      // here. Shop furniture has only the one name.
+      if (unit.playerid === null) {
+        data.name = req.body.name.trim();
+      } else {
+        data.storename = req.body.name.trim();
+      }
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
     const updated = await prisma.storage.update({ where: { id }, data });
-    return res.status(200).json(updated);
+    return res.status(200).json({ ...updated, name: storeName(updated) });
   })
 );
 
@@ -308,7 +318,7 @@ router.post(
     return res.status(200).json({
       message: STATE_MESSAGE[target],
       id: updated.id,
-      name: updated.name,
+      name: storeName(updated),
       state: updated.state,
       forsale: updated.state === "for_sale",
       owner: unit.player ? { id: unit.player.id, name: unit.player.name } : null,
@@ -357,6 +367,9 @@ router.get(
         : Math.max(0, parseInt(req.query.spread, 10) || 0);
 
     const contents = await readContents(req.prisma, unit, { spread });
+    // The admin app calls containers by the store's label; the owner already
+    // rides along in `contents.owner` for the page's tag.
+    contents.name = storeName(unit);
     // Two levels of touch. `editable`: the store adds and removes cards only
     // in its own furniture — a customer's container is displayed and sold
     // from, never restocked behind their back. `arrangeable`: whoever
@@ -765,6 +778,9 @@ router.post(
       );
       if (result.badFile) {
         return res.status(400).json({ message: messages.MANABOX_BAD_FILE });
+      }
+      if (result.tooLarge) {
+        return res.status(400).json({ message: messages.MANABOX_TOO_LARGE });
       }
       return res.status(200).json(result);
     } catch (err) {

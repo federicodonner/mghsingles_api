@@ -23,6 +23,7 @@ import { exchangeRate, setExchangeRate, toPesos } from "../services/exchange.js"
 import {
   describeLocation,
   sortLocations,
+  storeDisplayName,
   LOCATION_INCLUDE,
 } from "../services/locations.js";
 import { matches as matchesWishlist } from "./wishlist.js";
@@ -652,7 +653,15 @@ router.delete(
     const placements = await prisma.cardplacement.findMany({
       where: { orderlineid: lineId, pulled: true },
       include: {
-        storage: { select: { id: true, name: true, type: true } },
+        storage: {
+          select: {
+            id: true,
+            name: true,
+            storename: true,
+            type: true,
+            player: { select: { name: true } },
+          },
+        },
         card: {
           include: { cardgeneral: { select: { name: true, cardsetcode: true } } },
         },
@@ -664,7 +673,7 @@ router.delete(
       name: pl.card?.cardgeneral?.name ?? null,
       cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
       storageid: pl.storage?.id ?? null,
-      storagename: pl.storage?.name ?? null,
+      storagename: storeDisplayName(pl.storage),
       storagetype: pl.storage?.type ?? null,
       page: pl.page,
       pocket: pl.pocket,
@@ -958,7 +967,15 @@ router.get(
     const placements = await prisma.cardplacement.findMany({
       where: { needsrefile: true },
       include: {
-        storage: { select: { id: true, name: true, type: true } },
+        storage: {
+          select: {
+            id: true,
+            name: true,
+            storename: true,
+            type: true,
+            player: { select: { name: true } },
+          },
+        },
         card: {
           include: {
             cardgeneral: { select: { name: true, cardsetcode: true } },
@@ -974,7 +991,7 @@ router.get(
         name: pl.card?.cardgeneral?.name ?? null,
         cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
         storageid: pl.storage?.id ?? null,
-        storagename: pl.storage?.name ?? null,
+        storagename: storeDisplayName(pl.storage),
         storagetype: pl.storage?.type ?? null,
         page: pl.page,
         pocket: pl.pocket,

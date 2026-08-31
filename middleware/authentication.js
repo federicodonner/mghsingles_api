@@ -1,6 +1,15 @@
 // Authentication middleware
 import messages from "../data/messages.js";
 
+// Optional session lifetime. Unset (or non-positive) keeps the historical
+// behaviour — a token is valid until logout — so turning this on is a
+// deliberate config choice. Set TOKEN_TTL_DAYS to a positive number and any
+// token older than that stops working, which bounds the damage of a leaked
+// token to that window.
+const ttlDays = Number(process.env.TOKEN_TTL_DAYS);
+const TOKEN_TTL_MS =
+  Number.isFinite(ttlDays) && ttlDays > 0 ? ttlDays * 86400 * 1000 : null;
+
 export async function authentication(req, res, next) {
   // Verifies that the authorization header exists
   if (!req.header("authorization")) {
@@ -30,6 +39,14 @@ export async function authentication(req, res, next) {
 
   if (!login) {
     return res.status(401).json({ message: messages.UNAUTHORIZED });
+  }
+
+  // If a session lifetime is configured, an aged token is treated as absent.
+  if (TOKEN_TTL_MS !== null) {
+    const age = Date.now() - new Date(login.date).getTime();
+    if (age > TOKEN_TTL_MS) {
+      return res.status(401).json({ message: messages.UNAUTHORIZED });
+    }
   }
 
   // If the token is found, verifies if the player exists

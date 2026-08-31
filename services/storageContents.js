@@ -523,12 +523,20 @@ export async function setBinderPosition(prisma, placement, body) {
 // exactly what the caller sees on screen and two reorders cannot interleave
 // into a sequence nobody asked for. Ids not in this box are ignored, so a
 // stray id cannot drag a card out of another container by being listed here.
+// A sorted box's reorder receives the whole new order at once. Cap the list so
+// a crafted request cannot make the id lookup and the per-id transaction
+// arbitrarily large; a real box has far fewer cards than this.
+const MAX_REORDER_IDS = 20000;
+
 export async function reorderSorted(prisma, unit, rawIds) {
   if (unit.type !== "sorted_box") {
     throw new ContentsError(messages.STORAGE_NOT_SORTED);
   }
 
-  const ids = (rawIds ?? []).map((n) => parseInt(n, 10)).filter((n) => n > 0);
+  const ids = (Array.isArray(rawIds) ? rawIds : [])
+    .slice(0, MAX_REORDER_IDS)
+    .map((n) => parseInt(n, 10))
+    .filter((n) => n > 0);
 
   const mine = await prisma.cardplacement.findMany({
     where: { storageid: unit.id, id: { in: ids } },

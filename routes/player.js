@@ -4,8 +4,21 @@ var router = Router();
 import { check, validationResult } from "express-validator";
 import { hash as _hash, compare } from "bcrypt";
 import messages from "../data/messages.js";
-import asyncHandler from "../middleware/asyncHandler.js";
+import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { generateToken } from "../utils/utils.js";
+
+// Password policy, shared by register and change-password. bcrypt only reads
+// the first 72 bytes, so the upper bound is about rejecting a multi-megabyte
+// string rather than a security limit; the lower bound is the real control.
+const PASSWORD_MIN = 8;
+const PASSWORD_MAX = 200;
+const passwordProblem = (pw) =>
+  typeof pw !== "string" || pw.length < PASSWORD_MIN || pw.length > PASSWORD_MAX;
+
+// Work factor for bcrypt. 8 was below the modern floor; 12 is the common
+// recommendation. `compare` reads the cost from the stored hash, so old
+// hashes keep verifying and re-hash to 12 only when the password is changed.
+const BCRYPT_COST = 12;
 
 // Create a new user
 router.post(
@@ -38,6 +51,12 @@ router.post(
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
+    // A minimum password length, enforced on the server so a customer cannot
+    // set a one-character password by calling the API directly.
+    if (passwordProblem(password)) {
+      return res.status(400).json({ message: messages.PASSWORD_TOO_SHORT });
+    }
+
     // Validates that the username has no spaces
     if (username.indexOf(" ") !== -1) {
       return res.status(400).json({ message: messages.USERNAME_INCORRECT });
@@ -67,7 +86,7 @@ router.post(
       }
 
       // Hash the password
-      const passwordhash = await _hash(password, 8);
+      const passwordhash = await _hash(password, BCRYPT_COST);
       // Adds the user to the database
       const newPlayer = await prisma.player.create({
         data: { username, name, email, passwordhash },
@@ -98,8 +117,10 @@ router.post(
             : messages.USERNAME_REPEAT,
         });
       }
-      console.log(e);
-      return res.status(400).json({ error: e });
+      // Anything unexpected is logged server-side but never returned: the raw
+      // Prisma error object leaked table and column names to the client.
+      console.error("register failed:", e);
+      return res.status(500).json({ message: messages.SERVER_ERROR });
     }
   })
 );
@@ -120,8 +141,10 @@ router.put(
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
     }
-    // Get the userId from the authentication middleware
-    var playerId = req.playerId;
+    // Get the userId from the authentication middleware. requirePlayerId
+    // throws rather than letting an absent id degrade the Prisma `where` into
+    // "match anyone".
+    var playerId = requirePlayerId(req);
 
     // Get the new data from the body
     var name = req.body.name;
@@ -175,7 +198,7 @@ router.put(
 // Update user password
 router.put("/password", asyncHandler(async (req, res) => {
   // Get the userId from the authentication middleware
-  var playerId = req.playerId;
+  var playerId = requirePlayerId(req);
 
   // Get the new data from the body
   var password = req.body.password;
@@ -184,6 +207,11 @@ router.put("/password", asyncHandler(async (req, res) => {
   // If there is no data, return error
   if (!password || !newPassword) {
     return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+  }
+
+  // The new password must meet the same policy as at registration.
+  if (passwordProblem(newPassword)) {
+    return res.status(400).json({ message: messages.PASSWORD_TOO_SHORT });
   }
 
   // Same story as PUT / above: raw SQL against a `client` that does not exist,
@@ -200,7 +228,7 @@ router.put("/password", asyncHandler(async (req, res) => {
 
   await req.prisma.player.update({
     where: { id: playerId },
-    data: { passwordhash: await _hash(newPassword, 8) },
+    data: { passwordhash: await _hash(newPassword, BCRYPT_COST) },
   });
 
   return res.status(200).json({ message: messages.USER_UPDATED });

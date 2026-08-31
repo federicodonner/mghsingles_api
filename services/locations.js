@@ -4,15 +4,33 @@
 // and by pick-up bags (so a cancelled order can be refiled where it came from).
 // Both need the same answer, and it must not drift between them.
 
+// A container has TWO names: `name` is the owner's (their Contenedores
+// section), `storename` is the store's label — what the container sits on the
+// shelf as. Blank falls back to the owner's name, so a container that was
+// never relabelled still reads sensibly.
+export const storeName = (storage) =>
+  (storage?.storename ?? "").trim() || storage?.name || null;
+
+// The store-side display name: the store's label, with the owner in
+// parentheses so staff always know whose consignment they are holding. A
+// shop-owned container has no owner and shows plainly.
+export function storeDisplayName(storage) {
+  const base = storeName(storage);
+  if (!base) return null;
+  const owner = storage?.player?.name;
+  return owner ? `${base} (${owner})` : base;
+}
+
 // Everything needed to render a location, plus the raw coordinates so a UI can
-// link through to the binder page.
+// link through to the binder page. Admin-facing only, so the container name is
+// the store's label with the owner in parentheses.
 export function describeLocation(placement) {
   const storage = placement.storage;
   return {
     placementid: placement.id,
     copyindex: placement.copyindex,
     storageid: storage?.id ?? null,
-    storagename: storage?.name ?? null,
+    storagename: storeDisplayName(storage),
     storagetype: storage?.type ?? null,
     state: storage?.state ?? "for_sale",
     owner: storage?.player?.name ?? null,
@@ -31,6 +49,7 @@ export const LOCATION_INCLUDE = {
     select: {
       id: true,
       name: true,
+      storename: true,
       type: true,
       state: true,
       playerid: true,

@@ -72,6 +72,8 @@ export {
   availableOf,
 } from "./availability.js";
 
+import { storeDisplayName } from "./locations.js";
+
 
 // Put a cancelled or expired order's cards back where they came from.
 //
@@ -94,7 +96,15 @@ export async function refileInstructions(prisma, orderId) {
   const placements = await prisma.cardplacement.findMany({
     where: { orderline: { orderid: orderId }, pulled: true },
     include: {
-      storage: { select: { id: true, name: true, type: true } },
+      storage: {
+        select: {
+          id: true,
+          name: true,
+          storename: true,
+          type: true,
+          player: { select: { name: true } },
+        },
+      },
       card: { include: { cardgeneral: { select: { name: true, cardsetcode: true } } } },
     },
   });
@@ -104,7 +114,8 @@ export async function refileInstructions(prisma, orderId) {
     name: pl.card?.cardgeneral?.name ?? null,
     cardsetcode: pl.card?.cardgeneral?.cardsetcode ?? null,
     storageid: pl.storage?.id ?? null,
-    storagename: pl.storage?.name ?? null,
+    // Read by the shop's refile panel, so the store's label + owner.
+    storagename: storeDisplayName(pl.storage),
     storagetype: pl.storage?.type ?? null,
     page: pl.page,
     pocket: pl.pocket,

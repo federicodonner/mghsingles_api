@@ -3,14 +3,15 @@ import { Router } from "express";
 var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
-import asyncHandler from "../middleware/asyncHandler.js";
+import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
+import { staff } from "../middleware/authentication.js";
 
 // Get the user's collection
 router.get(
   "/",
   asyncHandler(async (req, res) => {
     // Gets the userId from the authentication middleware
-    const playerid = req.playerId;
+    const playerid = requirePlayerId(req);
 
     // Gets prisma from middleware
     const prisma = req.prisma;
@@ -48,11 +49,16 @@ router.get(
   })
 );
 
-// Get all collections
-// Declared before "/:collectionId" so that "all" is not swallowed by the
-// numeric-id route.
+// Get all collections — the whole customer roster (id, playerid, name).
+//
+// STAFF ONLY. This is a shop helper (assigning a container to a customer), and
+// it lists every player's real name; under the customer `authentication` mount
+// alone, any logged-in customer could enumerate the entire customer base. The
+// `staff` gate here is what actually restricts it — the mount only proves you
+// are logged in.
 router.get(
   "/all",
+  staff,
   asyncHandler(async (req, res) => {
     // Gets prisma from middleware
     const prisma = req.prisma;
@@ -92,7 +98,7 @@ router.get(
     }
 
     // Gets the userId from the authentication middleware
-    const playerId = req.playerId;
+    const playerId = requirePlayerId(req);
     const collectionId = parseInt(req.params.collectionId, 10);
 
     // Gets prisma from middleware

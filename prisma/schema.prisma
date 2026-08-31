@@ -59,6 +59,33 @@ model card {
   cardplacement cardplacement[]
   orderline     orderline[]
   wishlistmatch wishlistmatch[]
+  cartitem      cartitem[]
+}
+
+/// One row in a customer's shopping cart.
+///
+/// A cart is a DRAFT, not a reservation: nothing here holds stock, and the
+/// shop hears nothing until the customer confirms — at which point each row
+/// is turned into the same pinned wishlist match a storefront buy used to
+/// raise instantly, and the row disappears. Availability is checked again at
+/// confirmation, because between adding and confirming someone else may have
+/// bought the copy.
+///
+/// No price column on purpose: what the customer pays is quoted (and frozen)
+/// when the shop bags the copy, exactly as before. The cart shows the live
+/// price so it never disagrees with the shelf.
+model cartitem {
+  id       Int    @id @default(autoincrement())
+  playerid Int
+  cardid   Int
+  quantity Int    @default(1)
+  created  Int
+  player   player @relation(fields: [playerid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cartitem_player")
+  card     card   @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "cartitem_card")
+
+  /// One row per card row per customer — adding the same card again bumps the
+  /// quantity instead of growing a second line.
+  @@unique([playerid, cardid], map: "cartitem_player_card_unique")
 }
 
 model cardcondition {
@@ -210,6 +237,7 @@ model player {
   order        order[]
   wishlist     wishlist[]
   notification notification[]
+  cartitem     cartitem[]
   login        login[]      @ignore
 }
 
@@ -249,7 +277,14 @@ model sale {
 /// false), at which point its cards are out of the shop's sellable inventory.
 model storage {
   id            Int             @id @default(autoincrement())
+  /// The OWNER's name for the container — what they see in their own
+  /// Contenedores section. For a shop-owned container this is the only name.
   name          String
+  /// The STORE's label for a customer's container. What binders sit on the
+  /// shelf as, so it is what shoppers browsing the store see and what every
+  /// admin view calls it. Null (or blank) falls back to `name` — a container
+  /// arrives under its owner's name until the shop relabels it.
+  storename     String?
   type          storagetype
   playerid      Int?
   /// Where this container is in its lifecycle. Replaces the old `inshop`

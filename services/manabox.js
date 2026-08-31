@@ -123,10 +123,20 @@ export function parseManaBox(text) {
 // Run the import. `unit` is the container, `collectionid` whose cards these
 // become. Returns a summary; never throws for a bad ROW — those are reported
 // per line so one typo does not void a whole scan.
+// Ceilings on one import, so a single request cannot drive unbounded database
+// work. The 2mb body limit bounds the row COUNT loosely; these bound the work
+// each import can actually do. A real scanned binder or box is well within
+// both.
+const MAX_ROWS = 5000;
+const MAX_ROW_QUANTITY = 100;
+
 export async function importManaBox(prisma, unit, collectionid, text) {
   const { header, entries } = parseManaBox(text);
   if (!header) {
     return { ok: false, added: 0, skipped: 0, errors: [], badFile: true };
+  }
+  if (entries.length > MAX_ROWS) {
+    return { ok: false, added: 0, skipped: 0, errors: [], tooLarge: true };
   }
 
   const [conditions, languages] = await Promise.all([
@@ -207,7 +217,13 @@ export async function importManaBox(prisma, unit, collectionid, text) {
       languageByName.get(LANGUAGE_MAP[(entry.language ?? "").toLowerCase()]) ??
       fallbackLanguage;
 
-    const quantity = Math.max(1, parseInt(entry.quantity, 10) || 1);
+    // Clamp per-row quantity. `Math.max` only bounded the floor, so a single
+    // row with Quantity=2000000000 drove billions of sequential inserts in one
+    // request. A scanned stack in one sleeve is realistically a few dozen.
+    const quantity = Math.min(
+      MAX_ROW_QUANTITY,
+      Math.max(1, parseInt(entry.quantity, 10) || 1)
+    );
     const position =
       unit.type === "binder"
         ? {

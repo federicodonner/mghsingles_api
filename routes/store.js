@@ -15,6 +15,8 @@ import asyncHandler from "../middleware/asyncHandler.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 import { exchangeRate } from "../services/exchange.js";
+import { readContents } from "../services/storageContents.js";
+import { storeName } from "../services/locations.js";
 
 const PAGE_SIZE = 24;
 
@@ -165,10 +167,17 @@ router.get(
     }
     const prisma = req.prisma;
 
-    const name = (req.query.name ?? "").trim();
-    const set = (req.query.set ?? "").trim();
-    const type = (req.query.type ?? "").trim();
-    const colours = (req.query.colors ?? "").trim();
+    // String()-wrapped, not just `.trim()`: this route is unauthenticated, and
+    // a query param sent as `?name[]=x` arrives as an array, so a bare
+    // `.trim()` would throw a 500. Coercing first also stops a `?name[$gt]=`
+    // object from ever reaching a Prisma filter as an operator — it becomes the
+    // literal string "[object Object]" and matches nothing. Capped in length so
+    // a multi-megabyte term cannot drive an oversized query.
+    const readTerm = (v) => String(v ?? "").slice(0, 200).trim();
+    const name = readTerm(req.query.name);
+    const set = readTerm(req.query.set);
+    const type = readTerm(req.query.type);
+    const colours = readTerm(req.query.colors);
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
 
     if (!name && !set && !type && !colours) {
@@ -228,6 +237,143 @@ router.get(
       truncated: matches.length >= MAX_MATCHES,
       cards: sellable.slice(start, start + PAGE_SIZE),
     });
+  })
+);
+
+// The containers a shopper can leaf through, the way they would at the
+// physical counter.
+//
+// Only `for_sale` containers: those are the ones on the shop's shelf with
+// their cards on sale. Empty ones are left out — an empty binder is a
+// guaranteed dead end, same reasoning as the filters above. No owner: whose
+// consignment a container is has never been the storefront's business.
+router.get(
+  "/units",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const units = await prisma.storage.findMany({
+      where: { state: "for_sale" },
+      include: {
+        // Bagged copies are physically out of the container, so they do not
+        // count toward what a browser would find in it.
+        _count: {
+          select: { cardplacement: { where: { orderlineid: null } } },
+        },
+      },
+      orderBy: { name: "asc" },
+    });
+
+    return res.status(200).json(
+      units
+        .filter((u) => u._count.cardplacement > 0)
+        .map((u) => ({
+          id: u.id,
+          // Shoppers see the STORE's label for the container, never the
+          // owner's own name (nor the owner).
+          name: storeName(u),
+          type: u.type,
+          cardcount: u._count.cardplacement,
+        }))
+    );
+  })
+);
+
+// Everything inside one for-sale container, shaped like the owner's own view
+// (binder pages of pockets, box lists) but flattened for shopping: every card
+// carries its live price and how many copies are actually buyable, and the
+// admin-side facts — owner, collection, condition, language — never leave.
+router.get(
+  "/units/:unitId",
+  [check("unitId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.unitId, 10);
+
+    const unit = await prisma.storage.findUnique({ where: { id } });
+    // Not-for-sale answers the same 404 as nonexistent on purpose: a retired
+    // container's contents are off the market, and the storefront saying
+    // "it exists but you can't look" would only invite probing.
+    if (!unit || unit.state !== "for_sale") {
+      return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+    }
+
+    await releaseExpiredOrders(prisma);
+    const contents = await readContents(prisma, unit);
+
+    // One availability pass over every distinct card row in the container.
+    const placements = [
+      ...(contents.pages ?? []).flatMap((page) =>
+        page ? page.pockets.flatMap((pocket) => pocket.cards) : []
+      ),
+      ...(contents.standby ?? []),
+      ...(contents.cards ?? []),
+    ];
+    const ids = [...new Set(placements.map((pl) => pl.cardid))];
+    const cards = await prisma.card.findMany({
+      where: { id: { in: ids } },
+      include: { collection: { select: { active: true } } },
+    });
+    const { reserved, offSale } = await availabilityFor(prisma, cards);
+    const info = new Map(
+      cards.map((card) => [
+        card.id,
+        {
+          price: card.price,
+          available:
+            card.approved && card.collection?.active
+              ? availableOf(card, reserved, offSale)
+              : 0,
+        },
+      ])
+    );
+
+    const publicPlacement = (pl) => ({
+      placementid: pl.placementid,
+      cardid: pl.cardid,
+      page: pl.page,
+      pocket: pl.pocket,
+      depth: pl.depth,
+      sequence: pl.sequence,
+      name: pl.name,
+      cardsetcode: pl.cardsetcode,
+      cardsetname: pl.cardsetname,
+      image: pl.image,
+      variant: pl.variant,
+      price: info.get(pl.cardid)?.price ?? null,
+      available: info.get(pl.cardid)?.available ?? 0,
+    });
+
+    const shaped = {
+      id: contents.id,
+      name: storeName(unit),
+      type: contents.type,
+      cardcount: contents.cardcount,
+    };
+    if (unit.type === "binder") {
+      shaped.maxPage = contents.maxPage;
+      shaped.maxSpread = contents.maxSpread;
+      shaped.pages = (contents.pages ?? []).map((page) =>
+        page
+          ? {
+              page: page.page,
+              pockets: page.pockets.map((pocket) => ({
+                pocket: pocket.pocket,
+                cards: pocket.cards.map(publicPlacement),
+              })),
+            }
+          : null
+      );
+      // Half-sorted cards are still physically in the shop and still for
+      // sale; hiding them would hide sellable stock.
+      shaped.standby = (contents.standby ?? []).map(publicPlacement);
+    } else {
+      shaped.cards = (contents.cards ?? []).map(publicPlacement);
+    }
+    return res.status(200).json(shaped);
   })
 );
 

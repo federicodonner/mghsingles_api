@@ -2,7 +2,7 @@
 import { Router } from "express";
 var router = Router();
 import messages from "../data/messages.js";
-import asyncHandler from "../middleware/asyncHandler.js";
+import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { saleNet, saleRemaining, ZERO } from "../services/credit.js";
 
 // Get the user's sales
@@ -10,7 +10,7 @@ router.get(
   "/",
   asyncHandler(async (req, res) => {
     // Gets the playerId from the authentication middleware
-    const playerId = req.playerId;
+    const playerId = requirePlayerId(req);
 
     // Gets prisma from middleware
     const prisma = req.prisma;

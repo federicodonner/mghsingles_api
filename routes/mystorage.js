@@ -561,6 +561,9 @@ router.post(
       if (result.badFile) {
         return res.status(400).json({ message: messages.MANABOX_BAD_FILE });
       }
+      if (result.tooLarge) {
+        return res.status(400).json({ message: messages.MANABOX_TOO_LARGE });
+      }
       return res.status(200).json(result);
     } catch (err) {
       return handle(err, res);

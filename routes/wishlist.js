@@ -22,11 +22,16 @@ import { quotePrintings } from "../services/pricing.js";
 import { moxfieldDeckId, fetchMoxfieldDeck } from "../services/moxfield.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 
-// Normalise a constraint list from the request: unique, right type, and an
-// empty list always meaning "any".
+// Normalise a constraint list from the request: unique, right type, capped,
+// and an empty list always meaning "any". The cap matters because these lists
+// are PERSISTED and re-scanned on every wishlist read and matcher run — an
+// unbounded array would be stored amplification. No real card has anywhere
+// near this many printings/languages/finishes.
+const MAX_CONSTRAINTS = 200;
 function readList(value, cast) {
   if (!Array.isArray(value)) return [];
   const cleaned = value
+    .slice(0, MAX_CONSTRAINTS)
     .map(cast)
     .filter((v) => (typeof v === "number" ? Number.isInteger(v) : Boolean(v)));
   return [...new Set(cleaned)];

@@ -477,7 +477,11 @@ router.post(
   [
     authentication,
     check("scryfallId").escape().exists(),
-    check("quantity").isNumeric().isFloat({ min: 1 }),
+    // An upper bound as well as a lower one: a card row's quantity later drives
+    // per-copy loops (cart confirmation, sale), so an unbounded value here is a
+    // denial-of-service lever, not just bad data. 500 is far above any real
+    // manual add (the UI offers 1-10).
+    check("quantity").isNumeric().isFloat({ min: 1, max: 500 }),
     check("condition").optional().isNumeric(),
     check("language").optional().isNumeric(),
     check("variant").optional().escape(),
@@ -605,94 +609,16 @@ router.post(
   })
 );
 
-// Everything the CardKingdom price scrape needs about one stock row.
-// Parameterised — `cardid` arrives from a URL param and a request body, both of
-// which used to be interpolated straight into the statement.
-const CARD_FOR_PRICE_SQL =
-  "SELECT c.id, c.price, c.priceupdate, c.conditionid, c.variant, c.ckuri, cg.* " +
-  "FROM card c LEFT JOIN cardgeneral cg ON c.scryfallid = cg.scryfallid " +
-  "WHERE c.id = $1";
-
-// --------------------------------
-// --------------------------------
-// Returns the price of a single card scrapped from CK
-router.post("/price/:cardid", authentication, asyncHandler(async (req, res) => {
-  const cardid = parseInt(req.params.cardid, 10);
-  if (!(cardid > 0)) {
-    return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-  }
-  const cards = await client.query(CARD_FOR_PRICE_SQL, [cardid]);
-  if (cards.err) {
-    throw cards.err;
-  }
-
-  if (!cards.rows.length) {
-    return res.status(200).json({ price: null });
-  }
-
-  // FALTA VERIFICAR LA FECHA DE INGRESO DEL PRECIO
-  // If there is already a price for the card return that
-  if (cards.rows[0].price) {
-    const ckurl = `https://${process.env.CARDKINGDOM_URL}${cards.rows[0].ckuri}`;
-    return res.status(200).json({ price: cards.rows[0].price, ckurl });
-  }
-
-  const singlePriceResponse = await getSingleCardPrice(cards.rows[0]);
-
-  if (!singlePriceResponse.price) {
-    return res.status(404).json({
-      message: "Precio no encontrado",
-      ckurl: singlePriceResponse.ckurl,
-    });
-  }
-  return res.status(200).json(singlePriceResponse);
-}));
-
-// --------------------------------
-// --------------------------------
-// Returns the price of a group of cards scrapped from CK
-// Keep 2 seconds in between to avoid 429
-router.post("/multipleprice", authentication, asyncHandler(async (req, res) => {
-  const cards = req.body.cards;
-  let prices = [];
-  let scrappedCards = 0;
-
-  new Promise((resolveList) => {
-    // For each card, try to find the price in the database first
-    cards.forEach(async (card, index) => {
-      const responseCards = await client.query(CARD_FOR_PRICE_SQL, [
-        parseInt(card.id, 10),
-      ]);
-      if (responseCards.err) {
-        throw responseCards.err;
-      }
-
-      if (responseCards.rows.length) {
-        // If the price is there, add it to the object
-        if (responseCards.rows[0].price) {
-          card.price = responseCards.rows[0].price;
-          card.ckurl = `https://${process.env.CARDKINGDOM_URL}${responseCards.rows[0].ckuri}`;
-        } else {
-          // Scrapped cards adds a different delay for each card so that all
-          // the requests are not done at the same time
-          scrappedCards = scrappedCards + 1;
-          // If it's not there, wait 1 second and fetch it from CK
-          await new Promise((resolveIndividual) => {
-            setTimeout(async () => {
-              responseFromCK = await getSingleCardPrice(responseCards.rows[0]);
-              card.price = responseFromCK.price;
-              card.ckurl = responseFromCK.ckurl;
-              resolveIndividual();
-            }, scrappedCards * process.env.CARDKINGDOM_AWAIT_TIME);
-          });
-        }
-      }
-      if (index === cards.length - 1) {
-        resolveList();
-      }
-    });
-  }).then(() => {
-    return res.status(200).json({ cards });
-  });
-}));
+// NOTE: two routes used to live here — POST /price/:cardid and
+// POST /multipleprice — that scraped CardKingdom on demand. They were removed
+// in the 2026 security pass. They were dead and dangerous: they called
+// `client.query(...)`, but `client` is the connect FUNCTION from config/db.js,
+// not a connected client, so every call threw. /price 500'd; /multipleprice
+// threw inside a `.forEach(async …)` whose promise result was discarded, so
+// the response was NEVER sent and the request hung — an unauthenticated-cost
+// socket leak reachable by any logged-in user, with `req.body.cards` unbounded
+// and un-role-gated. No UI called either. Pricing now runs through the
+// owner-gated /admin pricing routes and the nightly sync. If on-demand
+// scraping is ever wanted back, gate it to staff/owner, validate and bound the
+// input, and use a real pg client.
 export default router;

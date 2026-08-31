@@ -2,6 +2,15 @@ const messages = {
   USER_NOT_FOUND:
     "El usuario especificado no existe, revise los datos y vuelva a intentarlo.",
   INCORRECT_PASSWORD: "La contraseña ingresada es incorrecta.",
+  // One message for "no such user" AND "wrong password", so login cannot be
+  // used to discover which accounts exist.
+  INCORRECT_CREDENTIALS:
+    "Usuario o contraseña incorrectos. Revisá los datos y volvé a intentar.",
+  LOGGED_OUT: "Sesión cerrada.",
+  TOO_MANY_REQUESTS:
+    "Demasiados intentos. Esperá unos minutos y volvé a intentar.",
+  PASSWORD_TOO_SHORT:
+    "La contraseña debe tener al menos 8 caracteres.",
   UNAUTHORIZED: "Ocurrió un error, por favor vuelve a ingresar.",
   PARAMETERS_ERROR:
     "Algunos de los parámetros no son correctos, verifícalos y vuelve a intentar.",
@@ -68,6 +77,8 @@ const messages = {
     "No se pudo leer el mazo de Moxfield, intentá de nuevo más tarde.",
   MANABOX_BAD_FILE:
     "Ese archivo no parece una exportación de ManaBox (falta la cabecera).",
+  MANABOX_TOO_LARGE:
+    "El archivo tiene demasiadas filas. Dividilo en partes más chicas.",
   PLACEMENT_COMMITTED:
     "Esa copia está apartada para un pedido, no se puede mover hasta entregarla.",
   COPY_ALREADY_PLACED: "Esa copia ya está guardada en un contenedor.",
@@ -93,6 +104,14 @@ const messages = {
   MATCH_SET_ASIDE: "La carta fue apartada para el cliente.",
   CARD_RESERVED_FOR_YOU:
     "Pedida. Te avisamos cuando esté apartada para que la retires.",
+  CART_ADDED: "Agregada al carrito.",
+  CART_ITEM_NOT_FOUND: "Esa carta no está en tu carrito.",
+  CART_ITEM_REMOVED: "La carta fue quitada del carrito.",
+  CART_EMPTY: "Tu carrito está vacío.",
+  CART_NOT_ENOUGH_STOCK:
+    "No hay stock suficiente de esa carta para agregarla al carrito.",
+  CART_LINE_LIMIT:
+    "Llegaste al máximo de copias por carta. Escribinos para una compra mayor.",
   WITHDRAW_ONLY_IN_SHOP:
     "Sólo podés pedir cartas de un contenedor que está en la tienda.",
   WITHDRAW_REQUESTED:
