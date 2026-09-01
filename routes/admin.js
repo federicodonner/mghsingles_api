@@ -1786,6 +1786,28 @@ router.put(
       data: { role },
       select: { id: true, username: true, name: true, role: true },
     });
+
+    // A staff or owner member needs a collection to file shop stock into:
+    // shop-owned containers file into the acting member's own collection. Every
+    // self-registered account already has one, but an account created outside
+    // the registration flow (seeded, or hand-inserted) never got one — which is
+    // what made the first shop add/import fail with an unexplained error.
+    // Guarantee one exists at promotion so it cannot happen again.
+    if (role === "staff" || role === "owner") {
+      const hasCollection = await prisma.collection.findFirst({
+        where: { playerid: id },
+        select: { id: true },
+      });
+      if (!hasCollection) {
+        // percent 1.0 = the shop keeps 100%: a staff/owner collection holds the
+        // shop's OWN stock, so a sale from it owes nobody. Change it per account
+        // if that member also consigns their own cards for a cut.
+        await prisma.collection.create({
+          data: { playerid: id, percent: 1.0, active: true },
+        });
+      }
+    }
+
     return res.status(200).json(updated);
   })
 );

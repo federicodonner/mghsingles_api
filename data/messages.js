@@ -24,6 +24,8 @@ const messages = {
   USERNAME_CORRECT: "El nombre de usuario seleccionado es correcto.",
   COLLECTION_PROBLEM:
     "Hubo un problema cargando tu colección, por favor inténtalo nuevamente más tarde o ponte en contacto con el administrador.",
+  STOCK_NO_COLLECTION:
+    "La cuenta que recibe estas cartas no tiene una colección activa donde guardarlas. Que el dueño la cree desde la administración.",
   CARD_NOT_FOUND: "La carta especificada no existe, por favor verifícala.",
   SET_NOT_FOUND: "El set especificado no existe.",
   COLLECTION_UPDATED: "Su colección ha sido actualizada con éxito.",

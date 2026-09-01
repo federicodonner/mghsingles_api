@@ -762,12 +762,23 @@ router.post(
     try {
       assertShopMayArrange(unit);
 
+      // Shop-owned containers file into the acting staff member's collection;
+      // a customer's container into the customer's. If that collection is
+      // missing this used to 404 with a generic message and NO server log —
+      // which is exactly how a staff/owner account created outside the
+      // registration flow (no collection ever made) turned into an
+      // undiagnosable "error genérico". Log it, and name the real problem.
+      const collectionOwnerId = unit.playerid ?? playerId;
       const collection = await prisma.collection.findFirst({
-        where: { playerid: unit.playerid ?? playerId, active: true },
+        where: { playerid: collectionOwnerId, active: true },
         select: { id: true },
       });
       if (!collection) {
-        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+        console.error(
+          `No active collection for player ${collectionOwnerId} while filing ` +
+            `into storage ${unit.id}`
+        );
+        return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
       }
 
       const result = await importManaBox(
@@ -848,12 +859,23 @@ router.post(
         });
       }
 
+      // Shop-owned containers file into the acting staff member's collection;
+      // a customer's container into the customer's. If that collection is
+      // missing this used to 404 with a generic message and NO server log —
+      // which is exactly how a staff/owner account created outside the
+      // registration flow (no collection ever made) turned into an
+      // undiagnosable "error genérico". Log it, and name the real problem.
+      const collectionOwnerId = unit.playerid ?? playerId;
       const collection = await prisma.collection.findFirst({
-        where: { playerid: unit.playerid ?? playerId, active: true },
+        where: { playerid: collectionOwnerId, active: true },
         select: { id: true },
       });
       if (!collection) {
-        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
+        console.error(
+          `No active collection for player ${collectionOwnerId} while filing ` +
+            `into storage ${unit.id}`
+        );
+        return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
       }
 
       const placement = await addPrintingCopy(prisma, unit, collection.id, {
