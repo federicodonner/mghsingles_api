@@ -70,6 +70,29 @@ export async function authentication(req, res, next) {
   next();
 }
 
+// Like `authentication`, but never rejects: if a valid token is present it sets
+// req.playerId, otherwise it just continues. For the public storefront, which
+// serves logged-out shoppers but wants to recognise a logged-in customer's own
+// cards ("es tuya") when a token happens to be sent.
+export async function optionalAuthentication(req, res, next) {
+  const header = req.header("authorization");
+  const parts = header ? header.split(" ") : [];
+  const token = parts[0] === "Bearer" ? parts[1] : null;
+  if (token) {
+    const login = await req.prisma.login.findFirst({
+      where: { token },
+      orderBy: { date: "desc" },
+    });
+    if (login) {
+      const player = await req.prisma.player.findUnique({
+        where: { id: login.playerid },
+      });
+      if (player) req.playerId = player.id;
+    }
+  }
+  next();
+}
+
 // Role gates for the shop side.
 //
 // `staff` covers everything a shop hand does: selling, stock, storage, orders.
@@ -100,4 +123,9 @@ function requireRole(allowed) {
 }
 
 export const staff = requireRole(["staff", "owner"]);
-export const owner = requireRole(["owner"]);
+// TEMPORARY (2026-09-02, Federico): staff and owner can both do everything —
+// the owner-only gate now admits staff too. The `owner` export is kept so the
+// routes that should later be owner-only (payouts, pricing policy, roles) stay
+// marked and can be tightened back by making this `["owner"]` again, without
+// hunting for the call sites.
+export const owner = requireRole(["staff", "owner"]);

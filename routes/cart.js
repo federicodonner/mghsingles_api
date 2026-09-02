@@ -96,9 +96,18 @@ router.post(
 
     const card = await prisma.card.findFirst({
       where: { id: cardid, approved: true, collection: { active: true } },
+      include: { collection: { select: { playerid: true } } },
     });
     if (!card) {
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+    }
+    // A card with no price is not on sale yet — it cannot go in a cart.
+    if (card.price == null) {
+      return res.status(400).json({ message: messages.CART_NOT_FOR_SALE });
+    }
+    // Your own consigned card is not something you buy — you ask for it back.
+    if (card.collection?.playerid === playerId) {
+      return res.status(400).json({ message: messages.CART_OWN_CARD });
     }
 
     // The cart holds no stock, but knowingly letting somebody cart a fifth

@@ -19,6 +19,7 @@ import {
   ZERO as CREDIT_ZERO,
 } from "../services/credit.js";
 import { applyReferencePrices } from "../services/pricing.js";
+import { buildPlayerHistory } from "../services/playerHistory.js";
 import { exchangeRate, setExchangeRate, toPesos } from "../services/exchange.js";
 import {
   describeLocation,
@@ -310,7 +311,6 @@ router.get(
       // did `delete user.passwordHash`, which never matched the actual
       // `passwordhash` column and shipped the bcrypt hash to the client.
       select: {
-        username: true,
         name: true,
         email: true,
         role: true,
@@ -597,6 +597,10 @@ router.post(
       });
       if (!collection) return null;
       const used = await consumeCredit(tx, collection.id, total, today);
+      // Record the split on the order so the customer's history can show what
+      // this purchase cost in cash vs credit, instead of a loose "used credit"
+      // event floating beside it.
+      await tx.order.update({ where: { id }, data: { creditused: used } });
       return { creditused: used.toFixed(2), cashdue: total.sub(used).toFixed(2) };
     });
 
@@ -1596,6 +1600,7 @@ router.get(
         buyprice: pin.buyprice,
         pricelocked: pin.price !== null,
         buypricelocked: pin.buyprice !== null,
+        revert: pin.revert,
         instock: inStock.get(pin.scryfallid) ?? 0,
       })),
       ...legacy.map((card) => ({
@@ -1647,27 +1652,24 @@ router.put(
     }
 
     const now = nowSeconds();
-    const pinData = {};
-    const stampData = {};
+    // A SOFT pin (revert) is a stand-in used only until CardKingdom has a
+    // reference; it leaves rows unlocked so the sync can take over. A hard pin
+    // (default) is authoritative and locks its rows.
+    const revert = req.body.revert === true;
+    const pinData = { revert };
     if (req.body.price !== undefined && req.body.price !== null) {
       if (!(Number(req.body.price) >= 0)) {
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
       pinData.price = Number(req.body.price);
-      stampData.price = pinData.price;
-      stampData.pricelocked = true;
-      stampData.priceupdate = now;
     }
     if (req.body.buyprice !== undefined && req.body.buyprice !== null) {
       if (!(Number(req.body.buyprice) >= 0)) {
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
       pinData.buyprice = Number(req.body.buyprice);
-      stampData.buyprice = pinData.buyprice;
-      stampData.buypricelocked = true;
-      stampData.buypriceupdate = now;
     }
-    if (!Object.keys(pinData).length) {
+    if (pinData.price === undefined && pinData.buyprice === undefined) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
@@ -1677,10 +1679,45 @@ router.put(
       update: { ...pinData, updated: now },
     });
 
-    const { count } = await prisma.card.updateMany({
-      where: { scryfallid, collection: { active: true } },
-      data: stampData,
-    });
+    let count = 0;
+    if (pinData.price !== undefined) {
+      if (revert) {
+        // Fill only the rows CardKingdom has not priced (price null), and
+        // leave them unlocked so a future reference wins.
+        const r = await prisma.card.updateMany({
+          where: {
+            scryfallid,
+            collection: { active: true },
+            pricelocked: false,
+            price: null,
+          },
+          data: { price: pinData.price, baseprice: null, priceupdate: now },
+        });
+        count += r.count;
+      } else {
+        const r = await prisma.card.updateMany({
+          where: { scryfallid, collection: { active: true } },
+          data: {
+            price: pinData.price,
+            baseprice: null,
+            pricelocked: true,
+            priceupdate: now,
+          },
+        });
+        count += r.count;
+      }
+    }
+    if (pinData.buyprice !== undefined) {
+      const r = await prisma.card.updateMany({
+        where: { scryfallid, collection: { active: true } },
+        data: {
+          buyprice: pinData.buyprice,
+          buypricelocked: true,
+          buypriceupdate: now,
+        },
+      });
+      count += r.count;
+    }
 
     return res.status(200).json({ updated: count });
   })
@@ -1732,16 +1769,204 @@ router.delete(
 
 const ROLES = ["customer", "staff", "owner"];
 
-// Everyone with an account, so the owner can see who has which role.
+// Everyone with an account, with their phone and — for customers — their store
+// credit. The Usuarios page splits them into admins and clients.
 router.get(
   "/player",
   owner,
   asyncHandler(async (req, res) => {
-    const players = await req.prisma.player.findMany({
-      select: { id: true, username: true, name: true, email: true, role: true },
+    const prisma = req.prisma;
+    const players = await prisma.player.findMany({
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        phone: true,
+        role: true,
+        collection: { select: { id: true } },
+      },
       orderBy: [{ role: "asc" }, { name: "asc" }],
     });
-    return res.status(200).json(players);
+
+    // Credit only applies to customers, and it is the same derived value as
+    // creditFor — but computed for every customer at once in two grouped reads
+    // rather than a query per person.
+    const customerCollectionIds = players
+      .filter((p) => p.role === "customer")
+      .flatMap((p) => p.collection.map((c) => c.id));
+
+    const creditByCollection = new Map();
+    if (customerCollectionIds.length) {
+      const [sales, adjustments] = await Promise.all([
+        prisma.sale.findMany({
+          where: { collectionid: { in: customerCollectionIds } },
+          select: {
+            collectionid: true,
+            price: true,
+            baseprice: true,
+            percent: true,
+            quantity: true,
+            paidamount: true,
+          },
+        }),
+        prisma.creditadjustment.findMany({
+          where: { collectionid: { in: customerCollectionIds } },
+          select: { collectionid: true, amount: true },
+        }),
+      ]);
+      for (const s of sales) {
+        const cur = creditByCollection.get(s.collectionid) ?? CREDIT_ZERO;
+        creditByCollection.set(s.collectionid, cur.add(saleRemaining(s)));
+      }
+      for (const a of adjustments) {
+        const cur = creditByCollection.get(a.collectionid) ?? CREDIT_ZERO;
+        creditByCollection.set(a.collectionid, cur.add(a.amount));
+      }
+    }
+
+    return res.status(200).json(
+      players.map((p) => {
+        let credit = null;
+        if (p.role === "customer") {
+          let total = CREDIT_ZERO;
+          for (const c of p.collection) {
+            total = total.add(creditByCollection.get(c.id) ?? CREDIT_ZERO);
+          }
+          credit = (total.isNegative() ? CREDIT_ZERO : total).toString();
+        }
+        return {
+          id: p.id,
+          name: p.name,
+          email: p.email,
+          phone: p.phone,
+          role: p.role,
+          credit,
+        };
+      })
+    );
+  })
+);
+
+// Edit an account: its name and phone. Email is the login identifier and is
+// not editable here; roles have their own route.
+router.put(
+  "/player/:playerId",
+  [owner, check("playerId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.playerId, 10);
+
+    const data = {};
+    if (typeof req.body.name === "string" && req.body.name.trim()) {
+      data.name = req.body.name.trim();
+    }
+    // Phone is free-form and optional: an empty string clears it.
+    if (req.body.phone !== undefined) {
+      const phone = String(req.body.phone).trim();
+      data.phone = phone === "" ? null : phone;
+    }
+    if (!Object.keys(data).length) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    try {
+      const updated = await prisma.player.update({
+        where: { id },
+        data,
+        select: { id: true, name: true, email: true, phone: true, role: true },
+      });
+      return res.status(200).json(updated);
+    } catch (e) {
+      if (e?.code === "P2025") {
+        return res.status(404).json({ message: messages.USER_NOT_FOUND });
+      }
+      throw e;
+    }
+  })
+);
+
+// Adjust a customer's store credit by a signed amount, entered in PESOS and
+// stored in dollars at today's rate. A positive amount grants credit, a
+// negative one removes it; both are spendable at the counter like sale credit.
+router.post(
+  "/player/:playerId/credit",
+  [owner, check("playerId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.playerId, 10);
+
+    const pesos = Number(req.body.pesos);
+    if (!Number.isFinite(pesos) || pesos === 0) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const note =
+      typeof req.body.note === "string" && req.body.note.trim()
+        ? req.body.note.trim().slice(0, 200)
+        : null;
+
+    const target = await prisma.player.findUnique({
+      where: { id },
+      select: { role: true, collection: { select: { id: true }, orderBy: { id: "asc" } } },
+    });
+    if (!target) {
+      return res.status(404).json({ message: messages.USER_NOT_FOUND });
+    }
+    // Admins are the shop; they have no consignment credit to adjust.
+    if (target.role !== "customer" || !target.collection.length) {
+      return res.status(400).json({ message: messages.CREDIT_NOT_CUSTOMER });
+    }
+
+    // Pesos → dollars at the shop's rate; the credit ledger is in dollars.
+    const rate = await exchangeRate(prisma);
+    if (!rate) {
+      return res.status(400).json({ message: messages.CREDIT_NO_RATE });
+    }
+    const dollars = Number((pesos / rate).toFixed(2));
+    if (dollars === 0) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    await prisma.creditadjustment.create({
+      data: {
+        collectionid: target.collection[0].id,
+        amount: dollars,
+        date: nowSeconds(),
+        note,
+      },
+    });
+
+    return res.status(200).json({ message: messages.CREDIT_ADJUSTED });
+  })
+);
+
+// One account's activity, newest first: purchases (completed orders), sales
+// (their consigned cards that sold), and store-credit changes (grants,
+// deductions, and credit spent at the counter). All amounts are dollars; the
+// UI shows pesos.
+router.get(
+  "/player/:playerId/history",
+  [owner, check("playerId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.playerId, 10);
+
+    const history = await buildPlayerHistory(prisma, id);
+    if (!history) {
+      return res.status(404).json({ message: messages.USER_NOT_FOUND });
+    }
+    return res.status(200).json(history);
   })
 );
 
@@ -1784,7 +2009,7 @@ router.put(
     const updated = await prisma.player.update({
       where: { id },
       data: { role },
-      select: { id: true, username: true, name: true, role: true },
+      select: { id: true, name: true, email: true, role: true },
     });
 
     // A staff or owner member needs a collection to file shop stock into:
@@ -1901,6 +2126,57 @@ router.get(
       numberOfCards: flattened.length,
       cards: flattened,
     });
+  })
+);
+
+// In-stock cards that have no price yet — the home page lists these so the shop
+// can price them before they can be sold. Commons and uncommons are excluded:
+// they get an automatic default (35c / 50c) from the pricing pipeline, so a
+// null price on those is transient, not a card waiting on a human. Everything
+// listed is a rare/mythic/special with no CardKingdom reference and no fixed
+// price. One row per distinct stock card, only those with a copy physically in
+// a for-sale container (not in a pick-up bag).
+router.get(
+  "/unpriced",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    const cards = await prisma.card.findMany({
+      where: {
+        price: null,
+        approved: true,
+        collection: { active: true },
+        cardgeneral: { rarity: { notIn: ["common", "uncommon"] } },
+        cardplacement: {
+          some: { orderlineid: null, storage: { state: "for_sale" } },
+        },
+      },
+      include: {
+        cardgeneral: true,
+        _count: {
+          select: {
+            cardplacement: {
+              where: { orderlineid: null, storage: { state: "for_sale" } },
+            },
+          },
+        },
+      },
+    });
+
+    return res.status(200).json(
+      cards
+        .map((card) => ({
+          cardid: card.id,
+          scryfallid: card.scryfallid,
+          name: card.cardgeneral?.name ?? null,
+          cardsetcode: card.cardgeneral?.cardsetcode ?? null,
+          cardsetname: card.cardgeneral?.cardsetname ?? null,
+          image: card.cardgeneral?.image ?? null,
+          rarity: card.cardgeneral?.rarity ?? null,
+          variant: card.variant,
+          instock: card._count.cardplacement,
+        }))
+        .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
+    );
   })
 );
 

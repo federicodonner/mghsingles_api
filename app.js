@@ -107,7 +107,11 @@ app.post("/mystorage/:id/import", importLimiter);
 app.post("/wishlist/import-moxfield", importLimiter);
 
 // Middleware for authentication
-import { authentication, staff } from "./middleware/authentication.js";
+import {
+  authentication,
+  staff,
+  optionalAuthentication,
+} from "./middleware/authentication.js";
 app.use("/collection", authentication);
 app.use("/sale", authentication);
 app.use("/player/me", authentication);
@@ -155,6 +159,9 @@ app.use("/card", cardRoute);
 
 // Routes for store operations
 import storeRoute from "./routes/store.js";
+// Optional auth: the storefront is public, but when a logged-in customer
+// browses it we recognise their own consigned cards ("es tuya").
+app.use("/store", optionalAuthentication);
 app.use("/store", storeRoute);
 
 // Routes for admin operations

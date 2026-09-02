@@ -435,6 +435,15 @@ router.post(
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
+    // Is this the customer asking for their OWN consigned card back? That is a
+    // withdrawal, not a purchase — raisePinnedMatch derives the kind from this
+    // same ownership check, and a withdrawal is free, so the "not priced yet"
+    // guard below only applies to actual purchases.
+    const own = card.collection?.playerid === playerId;
+    if (!own && card.price == null) {
+      return res.status(400).json({ message: messages.CART_NOT_FOR_SALE });
+    }
+
     await releaseExpiredOrders(prisma);
     const { reserved, offSale } = await availabilityFor(prisma, [card]);
     if (availableOf(card, reserved, offSale) < 1) {
@@ -451,7 +460,11 @@ router.post(
     // the wanted quantity: a second buy means a second copy.
     await raisePinnedMatch(prisma, playerId, card, { bumpWanted: true });
 
-    return res.status(201).json({ message: messages.CARD_RESERVED_FOR_YOU });
+    return res.status(201).json({
+      message: own
+        ? messages.WITHDRAW_REQUESTED
+        : messages.CARD_RESERVED_FOR_YOU,
+    });
   })
 );
 

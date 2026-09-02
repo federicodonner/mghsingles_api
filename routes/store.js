@@ -26,9 +26,15 @@ const PAGE_SIZE = 24;
 const MAX_MATCHES = 600;
 
 // Shape a stock row for the storefront. Deliberately narrower than the admin
-// view: no owner, no buy price, no consignment percentage.
-function flattenCard(card, reserved, offSale) {
+// view: no owner, no buy price, no consignment percentage. `viewerId` (from
+// optional auth) is compared to the card's collection owner so a logged-in
+// customer's own consigned cards come back flagged `mine` — the storefront
+// shows those as "es tuya" with a withdrawal action instead of a price. The
+// owner id itself is never exposed; only the boolean about the viewer.
+function flattenCard(card, reserved, offSale, viewerId) {
   const { cardgeneral: general, cardcondition, cardlanguage } = card;
+  const mine =
+    viewerId != null && card.collection?.playerid === viewerId;
   return {
     id: card.id,
     scryfallid: card.scryfallid,
@@ -49,7 +55,10 @@ function flattenCard(card, reserved, offSale) {
     // /card/modifiers already serves.
     conditionid: card.conditionid,
     languageid: card.languageid,
-    price: card.price,
+    // A customer never sees the price of their own card; the UI shows "es tuya"
+    // instead. Nulling it here means it cannot leak even if the UI slips.
+    price: mine ? null : card.price,
+    mine,
     quantity: card.quantity,
     reserved: reserved.get(card.id) ?? 0,
     offsale: offSale.get(card.id) ?? 0,
@@ -61,6 +70,7 @@ const CARD_INCLUDE = {
   cardgeneral: true,
   cardcondition: { select: { name: true } },
   cardlanguage: { select: { name: true } },
+  collection: { select: { playerid: true } },
 };
 
 // Colour is stored as a WUBRG string, and empty means colourless — lands,
@@ -221,8 +231,14 @@ router.get(
     // silently served a partial page.
     const { reserved, offSale } = await availabilityFor(prisma, matches);
     const sellable = matches
-      .map((card) => flattenCard(card, reserved, offSale))
-      .filter((card) => card.available > 0)
+      .map((card) => flattenCard(card, reserved, offSale, req.playerId))
+      // A card with no price is not on sale yet — the shop still has to price
+      // it — so it is not offered to shoppers. The viewer's OWN cards are the
+      // exception: they show regardless (as "es tuya"), since the point there
+      // is to request them back, not to buy.
+      .filter(
+        (card) => card.mine || (card.price != null && card.available > 0)
+      )
       .sort(
         (a, b) =>
           (a.name ?? "").localeCompare(b.name ?? "") ||
@@ -273,6 +289,9 @@ router.get(
           name: storeName(u),
           type: u.type,
           cardcount: u._count.cardplacement,
+          // The viewer's own container is flagged so the storefront can mark it
+          // "propio" and hide prices inside it. Only the boolean leaves.
+          mine: req.playerId != null && u.playerid === req.playerId,
         }))
     );
   })
@@ -315,43 +334,60 @@ router.get(
     const ids = [...new Set(placements.map((pl) => pl.cardid))];
     const cards = await prisma.card.findMany({
       where: { id: { in: ids } },
-      include: { collection: { select: { active: true } } },
+      include: { collection: { select: { active: true, playerid: true } } },
     });
     const { reserved, offSale } = await availabilityFor(prisma, cards);
+    // The whole container is the viewer's own when its owner is the viewer.
+    const mineUnit = req.playerId != null && unit.playerid === req.playerId;
     const info = new Map(
-      cards.map((card) => [
-        card.id,
-        {
-          price: card.price,
-          available:
-            card.approved && card.collection?.active
+      cards.map((card) => {
+        const mine =
+          req.playerId != null && card.collection?.playerid === req.playerId;
+        const sellable = card.approved && card.collection?.active;
+        // Own cards: no price (shown as "es tuya"), always offered back.
+        // Others: a card with no price is not on sale, so it reads as
+        // unavailable — the shop still has to price it.
+        return [
+          card.id,
+          {
+            mine,
+            price: mine ? null : card.price,
+            available: mine
+              ? 1
+              : sellable && card.price != null
               ? availableOf(card, reserved, offSale)
               : 0,
-        },
-      ])
+          },
+        ];
+      })
     );
 
-    const publicPlacement = (pl) => ({
-      placementid: pl.placementid,
-      cardid: pl.cardid,
-      page: pl.page,
-      pocket: pl.pocket,
-      depth: pl.depth,
-      sequence: pl.sequence,
-      name: pl.name,
-      cardsetcode: pl.cardsetcode,
-      cardsetname: pl.cardsetname,
-      image: pl.image,
-      variant: pl.variant,
-      price: info.get(pl.cardid)?.price ?? null,
-      available: info.get(pl.cardid)?.available ?? 0,
-    });
+    const publicPlacement = (pl) => {
+      const meta = info.get(pl.cardid) ?? {};
+      return {
+        placementid: pl.placementid,
+        cardid: pl.cardid,
+        page: pl.page,
+        pocket: pl.pocket,
+        depth: pl.depth,
+        sequence: pl.sequence,
+        name: pl.name,
+        cardsetcode: pl.cardsetcode,
+        cardsetname: pl.cardsetname,
+        image: pl.image,
+        variant: pl.variant,
+        price: meta.price ?? null,
+        available: meta.available ?? 0,
+        mine: Boolean(meta.mine),
+      };
+    };
 
     const shaped = {
       id: contents.id,
       name: storeName(unit),
       type: contents.type,
       cardcount: contents.cardcount,
+      mine: mineUnit,
     };
     if (unit.type === "binder") {
       shaped.maxPage = contents.maxPage;

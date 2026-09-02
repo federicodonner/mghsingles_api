@@ -43,6 +43,7 @@ import {
   discardStandby,
   addPrintingCopy,
   changePrintingCopy,
+  reassignStorageCollection,
 } from "../services/copies.js";
 import { requirePlayerId } from "../middleware/asyncHandler.js";
 import { storeName } from "../services/locations.js";
@@ -181,7 +182,12 @@ router.post(
   })
 );
 
-// Rename a unit, or toggle whether the customer has taken it home.
+// Edit a container the shop holds: its store label (name) and/or its owner.
+//
+// Changing the owner re-homes every card inside it into the new owner's active
+// collection (services/copies.js), so the container and its cards agree on who
+// gets paid when they sell — see the owner-change decision. `owner`: a player
+// id to assign to a customer, or null to make it the shop's own.
 router.put(
   "/:storageId",
   [check("storageId").isNumeric()],
@@ -197,28 +203,107 @@ router.put(
     if (!unit) {
       return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
     }
-    // A released container is the customer's to name; the shop does not hold it.
+    // A released container is the customer's; the shop does not hold it.
     if (unit.state === "released") {
       return res.status(400).json({ message: messages.STORAGE_WITH_CUSTOMER });
     }
 
-    const data = {};
-    if (typeof req.body.name === "string" && req.body.name.trim()) {
-      // The store renames its OWN label. For a customer's container that is
-      // `storename` — the owner's `name` is theirs and never touched from
-      // here. Shop furniture has only the one name.
-      if (unit.playerid === null) {
-        data.name = req.body.name.trim();
-      } else {
-        data.storename = req.body.name.trim();
-      }
-    }
-    if (!Object.keys(data).length) {
+    const wantsOwnerChange = Object.prototype.hasOwnProperty.call(
+      req.body,
+      "owner"
+    );
+    const wantsNameChange =
+      typeof req.body.name === "string" && req.body.name.trim().length > 0;
+    if (!wantsOwnerChange && !wantsNameChange) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
-    const updated = await prisma.storage.update({ where: { id }, data });
-    return res.status(200).json({ ...updated, name: storeName(updated) });
+    // Whose the container ends up being — used below to decide which name field
+    // the store label writes into (shop furniture has one name; a customer's
+    // container keeps the owner's `name` and takes a `storename`).
+    let effectivePlayerId = unit.playerid;
+
+    if (wantsOwnerChange) {
+      const raw = req.body.owner;
+      const newPlayerId =
+        raw === null || raw === "" || raw === "shop" ? null : parseInt(raw, 10);
+      if (newPlayerId !== null && !(newPlayerId > 0)) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      if (newPlayerId !== unit.playerid) {
+        // A copy sitting in a pick-up bag is mid-sale; re-homing it would move
+        // it out from under an open order. Refuse until those clear.
+        const bagged = await prisma.cardplacement.count({
+          where: { storageid: id, orderlineid: { not: null } },
+        });
+        if (bagged > 0) {
+          return res.status(400).json({ message: messages.STORAGE_HAS_BAGGED });
+        }
+
+        // Where the cards go. To a customer: their own active collection (every
+        // registered account has one). To the shop: the acting staff member's
+        // collection, exactly like freshly imported shop stock.
+        let targetCollectionId;
+        if (newPlayerId === null) {
+          const coll = await prisma.collection.findFirst({
+            where: { playerid: req.playerId, active: true },
+            select: { id: true },
+          });
+          if (!coll) {
+            return res
+              .status(404)
+              .json({ message: messages.STOCK_NO_COLLECTION });
+          }
+          targetCollectionId = coll.id;
+        } else {
+          const target = await prisma.player.findUnique({
+            where: { id: newPlayerId },
+          });
+          if (!target) {
+            return res.status(404).json({ message: messages.USER_NOT_FOUND });
+          }
+          const coll = await prisma.collection.findFirst({
+            where: { playerid: newPlayerId, active: true },
+            select: { id: true },
+          });
+          if (!coll) {
+            return res
+              .status(400)
+              .json({ message: messages.OWNER_NO_COLLECTION });
+          }
+          targetCollectionId = coll.id;
+        }
+
+        await reassignStorageCollection(
+          prisma,
+          id,
+          targetCollectionId,
+          newPlayerId
+        );
+        effectivePlayerId = newPlayerId;
+      }
+    }
+
+    if (wantsNameChange) {
+      const label = req.body.name.trim();
+      await prisma.storage.update({
+        where: { id },
+        data: effectivePlayerId === null ? { name: label } : { storename: label },
+      });
+    }
+
+    const finalUnit = await prisma.storage.findUnique({
+      where: { id },
+      include: { player: { select: { id: true, name: true } } },
+    });
+    return res.status(200).json({
+      id: finalUnit.id,
+      name: storeName(finalUnit),
+      state: finalUnit.state,
+      owner: finalUnit.player
+        ? { id: finalUnit.player.id, name: finalUnit.player.name }
+        : null,
+    });
   })
 );
 
@@ -370,13 +455,15 @@ router.get(
     // The admin app calls containers by the store's label; the owner already
     // rides along in `contents.owner` for the page's tag.
     contents.name = storeName(unit);
-    // Two levels of touch. `editable`: the store adds and removes cards only
-    // in its own furniture — a customer's container is displayed and sold
-    // from, never restocked behind their back. `arrangeable`: whoever
-    // physically holds a binder may rearrange it, so a customer's container on
-    // the shop's shelf can be tidied — positions change, the cards do not.
-    contents.editable = unit.playerid === null;
-    contents.arrangeable = contents.editable || shopHolds(unit.state);
+    // Whoever physically holds the container may edit it (2026-09-02): the
+    // shop's own furniture, and a customer's container while it sits on the
+    // shop's shelf (for_sale / retired). A container in the customer's hands
+    // (released, or returning and not yet handed over) is not the shop's to
+    // touch. `editable` (add/remove/version/duplicate) and `arrangeable`
+    // (positions only) now coincide for the shop side; the split still matters
+    // on the customer's own /mystorage.
+    contents.editable = unit.playerid === null || shopHolds(unit.state);
+    contents.arrangeable = contents.editable;
     return res.status(200).json(contents);
   })
 );
@@ -466,7 +553,11 @@ router.delete(
     }
 
     try {
-      assertShopOwned(placement.storage);
+      // The shop may edit a container it physically holds just like the owner
+      // would — remove cards, change versions, duplicate — not only its own
+      // furniture (2026-09-02, Federico). `assertShopMayArrange` is exactly
+      // "shop-owned OR the shop is holding a customer's container".
+      assertShopMayArrange(placement.storage);
       const result = await removeCopy(req.prisma, placement);
       return res.status(200).json({
         message: messages.PLACEMENT_REMOVED,
@@ -582,7 +673,9 @@ router.put(
     }
 
     try {
-      assertShopOwned(placement.storage);
+      // Held-container editing (see the delete route): a change of version is
+      // an edit the shop may make on a container it holds.
+      assertShopMayArrange(placement.storage);
       const scryfallid = String(req.body.scryfallid ?? "").trim();
       const variant = String(req.body.variant ?? "").trim();
       const printing = await req.prisma.cardgeneral.findUnique({
@@ -629,7 +722,8 @@ router.post(
     }
 
     try {
-      assertShopOwned(placement.storage);
+      // Held-container editing (see the delete route).
+      assertShopMayArrange(placement.storage);
       const created = await duplicateCopy(req.prisma, placement);
       return res.status(201).json(created);
     } catch (err) {

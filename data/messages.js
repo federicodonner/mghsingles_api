@@ -26,6 +26,10 @@ const messages = {
     "Hubo un problema cargando tu colección, por favor inténtalo nuevamente más tarde o ponte en contacto con el administrador.",
   STOCK_NO_COLLECTION:
     "La cuenta que recibe estas cartas no tiene una colección activa donde guardarlas. Que el dueño la cree desde la administración.",
+  OWNER_NO_COLLECTION:
+    "El cliente elegido no tiene una colección activa donde recibir las cartas.",
+  STORAGE_HAS_BAGGED:
+    "El contenedor tiene cartas apartadas para un pedido. Resolvé esos pedidos antes de cambiar el dueño.",
   CARD_NOT_FOUND: "La carta especificada no existe, por favor verifícala.",
   SET_NOT_FOUND: "El set especificado no existe.",
   COLLECTION_UPDATED: "Su colección ha sido actualizada con éxito.",
@@ -39,6 +43,10 @@ const messages = {
     "No hay stock suficiente de una de las cartas para la venta.",
   SALE_PROCESSED: "Venta procesada correctamente.",
   USER_UPDATED: "Tus datos han sido actualizados",
+  CREDIT_ADJUSTED: "El crédito fue ajustado.",
+  CREDIT_NOT_CUSTOMER: "Solo los clientes tienen crédito de tienda.",
+  CREDIT_NO_RATE:
+    "No hay un tipo de cambio configurado para convertir el crédito.",
   REQUEST_TIMEOUT:
     "La solicitud falló por demora. Intenta nuevamente más tarde.",
   UPDATE_FINISHED_1: "Actualización terminada, ",
@@ -114,6 +122,9 @@ const messages = {
     "No hay stock suficiente de esa carta para agregarla al carrito.",
   CART_LINE_LIMIT:
     "Llegaste al máximo de copias por carta. Escribinos para una compra mayor.",
+  CART_NOT_FOR_SALE: "Esta carta todavía no tiene precio y no está a la venta.",
+  CART_OWN_CARD:
+    "Esta carta es tuya. Usá \"pedir que me lo devuelvan\" para retirarla.",
   WITHDRAW_ONLY_IN_SHOP:
     "Sólo podés pedir cartas de un contenedor que está en la tienda.",
   WITHDRAW_REQUESTED:

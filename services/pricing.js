@@ -86,7 +86,9 @@ export async function applyFixedPrice(db, card) {
     data.price = pin.price;
     // A hand-set price IS the real price — no floor uplift to account for.
     data.baseprice = null;
-    data.pricelocked = true;
+    // A SOFT pin leaves the row UNLOCKED so the nightly sync can hand it over
+    // to CardKingdom once a reference appears; a hard pin locks it.
+    data.pricelocked = !pin.revert;
     data.priceupdate = now;
   }
   if (pin.buyprice !== null) {
@@ -133,13 +135,15 @@ export async function quotePrintings(prisma, printings) {
 
   const quotes = new Map();
   for (const printing of printings) {
+    const finish = (printing.finishes ?? [])[0] ?? "nonfoil";
+    const reference = referenceFor.get(`${printing.scryfallid}:${finish}`);
     const pin = pinFor.get(printing.scryfallid);
-    if (pin?.price != null) {
+    // A hard pin wins outright; a soft pin (revert) only while CardKingdom has
+    // no reference — once it does, the quote follows the market.
+    if (pin?.price != null && (!pin.revert || reference?.retail == null)) {
       quotes.set(printing.scryfallid, pin.price);
       continue;
     }
-    const finish = (printing.finishes ?? [])[0] ?? "nonfoil";
-    const reference = referenceFor.get(`${printing.scryfallid}:${finish}`);
     const rarity = printing.rarity ?? null;
     const derived =
       reference?.retail != null
@@ -287,7 +291,25 @@ export async function applyReferencePrices(
   });
   for (const pin of pins) {
     const rowScope = onlyCardIds ? { id: { in: onlyCardIds } } : {};
-    if (pin.price !== null) {
+    if (pin.price !== null && pin.revert) {
+      // SOFT pin: only a fallback for rows CardKingdom has not priced. The main
+      // loop above already set the CardKingdom price on any unlocked row that
+      // has a reference (so those rows now have a non-null price and are
+      // skipped here); this fills the still-unpriced rows with the pin price
+      // and leaves them UNLOCKED, so the day CardKingdom lists the card the
+      // main loop replaces it. Never locks, never overrides a real price.
+      const { count } = await prisma.card.updateMany({
+        where: {
+          ...rowScope,
+          scryfallid: pin.scryfallid,
+          pricelocked: false,
+          price: null,
+        },
+        data: { price: pin.price, baseprice: null, priceupdate: now },
+      });
+      pinned += count;
+    } else if (pin.price !== null) {
+      // HARD pin: authoritative. Stamp onto every unlocked row and lock it.
       const { count } = await prisma.card.updateMany({
         where: { ...rowScope, scryfallid: pin.scryfallid, pricelocked: false },
         data: {

@@ -332,3 +332,104 @@ export async function reconcileQuantity(prisma, cardId) {
   }
   return card._count.cardplacement;
 }
+
+// Move every copy in a container into a different collection, keeping each
+// copy exactly where it physically sits (same pocket/sequence) but changing
+// WHOSE it is.
+//
+// Used when the shop reassigns a container's owner: the container and the cards
+// inside it must agree on who they belong to, because `collection.percent` is
+// what decides the payout when a card sells. Each copy leaves its current card
+// row and joins (or creates) the matching row — same printing, finish, grade,
+// language — in the target collection; a freshly created row is priced on the
+// spot, the same as any other birth. Copies already sitting in a pick-up bag
+// are refused by the caller, so nothing moves out from under an open order.
+//
+// One transaction for the whole container: reassigning half of it would leave
+// the container's cards split between two owners, which is exactly the
+// incoherence this exists to prevent.
+export async function reassignStorageCollection(
+  prisma,
+  storageId,
+  targetCollectionId,
+  newPlayerId
+) {
+  return prisma.$transaction(async (tx) => {
+    const placements = await tx.cardplacement.findMany({
+      where: { storageid: storageId, orderlineid: null },
+      include: { card: true },
+    });
+
+    let moved = 0;
+    for (const placement of placements) {
+      const source = placement.card;
+      if (!source || source.collectionid === targetCollectionId) continue;
+
+      // The copy's new home: same printing/grade/language/finish, the target
+      // collection. Same-identity rows merge, as everywhere in this module.
+      const existing = await tx.card.findFirst({
+        where: {
+          collectionid: targetCollectionId,
+          scryfallid: source.scryfallid,
+          conditionid: source.conditionid,
+          languageid: source.languageid,
+          variant: source.variant,
+        },
+      });
+      const target =
+        existing ??
+        (await tx.card.create({
+          data: {
+            collectionid: targetCollectionId,
+            scryfallid: source.scryfallid,
+            conditionid: source.conditionid,
+            languageid: source.languageid,
+            variant: source.variant,
+            quantity: 0,
+          },
+        }));
+      if (!existing) {
+        await applyFixedPrice(tx, target);
+        await applyReferencePrices(tx, { onlyCardIds: [target.id] });
+      }
+
+      const highest = await tx.cardplacement.aggregate({
+        where: { cardid: target.id },
+        _max: { copyindex: true },
+      });
+      await tx.cardplacement.update({
+        where: { id: placement.id },
+        data: { cardid: target.id, copyindex: (highest._max.copyindex ?? 0) + 1 },
+      });
+      await tx.card.update({
+        where: { id: target.id },
+        data: { quantity: { increment: 1 } },
+      });
+
+      // Shrink the row the copy left; the last copy takes the row with it.
+      const remaining = await tx.cardplacement.count({
+        where: { cardid: source.id },
+      });
+      if (remaining <= 0) {
+        await tx.card.delete({ where: { id: source.id } });
+      } else {
+        await tx.card.update({
+          where: { id: source.id },
+          data: { quantity: remaining },
+        });
+      }
+      moved++;
+    }
+
+    // Flip the container's owner in the SAME transaction, so the cards and the
+    // container can never disagree about who they belong to. `undefined` leaves
+    // it untouched (caller only wanted a re-home); `null` means the shop.
+    if (newPlayerId !== undefined) {
+      await tx.storage.update({
+        where: { id: storageId },
+        data: { playerid: newPlayerId },
+      });
+    }
+    return moved;
+  });
+}

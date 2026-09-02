@@ -35,19 +35,36 @@ export function saleRemaining(sale) {
   return remaining.isNegative() ? ZERO : remaining;
 }
 
+// A spend at the counter records the amount drawn from manual credit as a
+// negative adjustment row, so this note marks those apart from a shop grant.
+export const ADJ_SPENT_NOTE = "Usado en una compra";
+
 // The store's debt to one collection — also the credit its owner can spend.
+//
+// Derived from sales (Σ unpaid net) PLUS the manual adjustments the shop made
+// from the Usuarios page (signed): a grant adds credit, a deduction or a spend
+// removes it. Clamped at zero — deductions can zero a balance but never make
+// the store "owed" a negative amount.
 export async function creditFor(db, collectionid) {
-  const sales = await db.sale.findMany({
-    where: { collectionid },
-    select: {
-      price: true,
-      baseprice: true,
-      percent: true,
-      quantity: true,
-      paidamount: true,
-    },
-  });
-  return sales.reduce((sum, sale) => sum.add(saleRemaining(sale)), ZERO);
+  const [sales, adjustments] = await Promise.all([
+    db.sale.findMany({
+      where: { collectionid },
+      select: {
+        price: true,
+        baseprice: true,
+        percent: true,
+        quantity: true,
+        paidamount: true,
+      },
+    }),
+    db.creditadjustment.findMany({
+      where: { collectionid },
+      select: { amount: true },
+    }),
+  ]);
+  const fromSales = sales.reduce((sum, sale) => sum.add(saleRemaining(sale)), ZERO);
+  const total = adjustments.reduce((sum, a) => sum.add(a.amount), fromSales);
+  return total.isNegative() ? ZERO : total;
 }
 
 // Spend up to `amount` of a collection's credit, oldest debts first.
@@ -84,6 +101,26 @@ export async function consumeCredit(tx, collectionid, amount, date) {
     });
     left = left.sub(take);
     consumed = consumed.add(take);
+  }
+
+  // Sales exhausted but still credit to spend? It comes from the manual
+  // adjustment balance. Record the draw as a NEGATIVE adjustment so the
+  // derived credit drops by exactly what was spent, the same way filling a
+  // sale's paidamount drops its remainder.
+  if (left.gt(ZERO)) {
+    const agg = await tx.creditadjustment.aggregate({
+      where: { collectionid },
+      _sum: { amount: true },
+    });
+    const adjBalance = new Decimal(agg._sum.amount ?? 0);
+    if (adjBalance.gt(ZERO)) {
+      const take = left.lte(adjBalance) ? left : adjBalance;
+      await tx.creditadjustment.create({
+        data: { collectionid, amount: take.neg(), date, note: ADJ_SPENT_NOTE },
+      });
+      left = left.sub(take);
+      consumed = consumed.add(take);
+    }
   }
 
   if (consumed.gt(ZERO)) {

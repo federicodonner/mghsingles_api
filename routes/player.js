@@ -6,6 +6,8 @@ import { hash as _hash, compare } from "bcrypt";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { generateToken } from "../utils/utils.js";
+import { creditFor, ZERO as CREDIT_ZERO } from "../services/credit.js";
+import { buildPlayerHistory } from "../services/playerHistory.js";
 
 // Password policy, shared by register and change-password. bcrypt only reads
 // the first 72 bytes, so the upper bound is about rejecting a multi-megabyte
@@ -23,11 +25,7 @@ const BCRYPT_COST = 12;
 // Create a new user
 router.post(
   "/",
-  [
-    check("username").escape(),
-    check("name").escape(),
-    check("email").isEmail(),
-  ],
+  [check("name").escape(), check("email").isEmail()],
   asyncHandler(async (req, res) => {
     // Validates that the parameters are correct
     const errors = validationResult(req);
@@ -40,14 +38,14 @@ router.post(
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
     }
-    // Loads the data into variables to use
-    var username = String(req.body.username ?? "").trim();
+    // Loads the data into variables to use. No username any more — the email
+    // is the account's only identifier.
     var name = req.body.name;
     var email = req.body.email.toLowerCase();
     var password = req.body.password;
 
     // Validates that all the compulsory fields are present
-    if (!username || !name || !email || !password) {
+    if (!name || !email || !password) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
@@ -57,26 +55,12 @@ router.post(
       return res.status(400).json({ message: messages.PASSWORD_TOO_SHORT });
     }
 
-    // Validates that the username has no spaces
-    if (username.indexOf(" ") !== -1) {
-      return res.status(400).json({ message: messages.USERNAME_INCORRECT });
-    }
-
     // Gets prisma from middleware
     const prisma = req.prisma;
     try {
-      // Both identifiers must be free, and each refusal names the field: a
-      // person who owns the email already has an account and should log in;
-      // a person whose username is taken just picks another. Checked
-      // case-insensitively — "Ana" and "ana" would be indistinguishable at
-      // the counter. The @unique constraints below catch any race.
-      const usernameTaken = await prisma.player.findFirst({
-        where: { username: { equals: username, mode: "insensitive" } },
-        select: { id: true },
-      });
-      if (usernameTaken) {
-        return res.status(400).json({ message: messages.USERNAME_REPEAT });
-      }
+      // The email must be free: whoever owns it already has an account and
+      // should log in. Case-insensitive — the address is stored lowercased.
+      // The @unique constraint below catches any race.
       const emailTaken = await prisma.player.findFirst({
         where: { email: { equals: email, mode: "insensitive" } },
         select: { id: true },
@@ -87,9 +71,9 @@ router.post(
 
       // Hash the password
       const passwordhash = await _hash(password, BCRYPT_COST);
-      // Adds the user to the database
+      // Adds the user to the database (no username).
       const newPlayer = await prisma.player.create({
-        data: { username, name, email, passwordhash },
+        data: { name, email, passwordhash },
       });
 
       // After the user is inserted, create a collection and add it to it
@@ -107,15 +91,11 @@ router.post(
       // Add the generated token to the response
       res.status(201).send({ token });
     } catch (e) {
-      // Two registrations racing past the checks above land here: the unique
-      // constraint rejects the loser, and the target says which field to blame.
+      // Two registrations racing past the email check land here: the unique
+      // constraint rejects the loser. Email is the only unique field a new
+      // account sets now, so the collision is always the email.
       if (e?.code === "P2002") {
-        const target = String(e.meta?.target ?? "");
-        return res.status(400).json({
-          message: target.includes("email")
-            ? messages.EMAIL_REPEAT
-            : messages.USERNAME_REPEAT,
-        });
+        return res.status(400).json({ message: messages.EMAIL_REPEAT });
       }
       // Anything unexpected is logged server-side but never returned: the raw
       // Prisma error object leaked table and column names to the client.
@@ -149,9 +129,12 @@ router.put(
     // Get the new data from the body
     var name = req.body.name;
     var email = req.body.email;
+    // Phone is optional and free-form (people write it however they like); an
+    // empty string clears it.
+    var phone = req.body.phone;
 
     // If there is no data, return error
-    if (!name && !email) {
+    if (!name && !email && phone === undefined) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
@@ -162,6 +145,7 @@ router.put(
     const data = {};
     if (name) data.name = name;
     if (email) data.email = email.toLowerCase();
+    if (phone !== undefined) data.phone = phone ? String(phone).trim() : null;
 
     // A changed email must not collide with anybody else's — email is unique
     // and doubles as a login identifier.
@@ -182,7 +166,7 @@ router.put(
       const updated = await req.prisma.player.update({
         where: { id: playerId },
         data,
-        select: { id: true, username: true, name: true, email: true },
+        select: { id: true, name: true, email: true, phone: true },
       });
       return res.status(200).json(updated);
     } catch (e) {
@@ -242,16 +226,39 @@ router.get("/me", asyncHandler(async (req, res) => {
   // Gets prisma from middleware
   const prisma = req.prisma;
 
-  const player = await prisma.player.findUnique({ where: { id: playerId } });
+  const player = await prisma.player.findUnique({
+    where: { id: playerId },
+    include: { collection: { select: { id: true } } },
+  });
 
   // If there are no results, return error
   if (!player) {
     return res.status(401).json({ message: messages.UNAUTHORIZED });
   }
+
+  // Their spendable store credit (dollars) — the sum of what the store owes
+  // them across their collections, minus what they have already drawn. The
+  // account screen shows it in pesos.
+  let credit = CREDIT_ZERO;
+  for (const c of player.collection) {
+    credit = credit.add(await creditFor(prisma, c.id));
+  }
+
   // If there is a user, return it
   delete player.passwordhash;
   delete player.id;
-  return res.status(200).json(player);
+  delete player.collection;
+  return res.status(200).json({ ...player, credit: credit.toFixed(2) });
+}));
+
+// The signed-in customer's own activity, same shape and ordering as the admin's
+// per-customer history — both read services/playerHistory.js.
+router.get("/me/history", asyncHandler(async (req, res) => {
+  const history = await buildPlayerHistory(req.prisma, req.playerId);
+  if (!history) {
+    return res.status(401).json({ message: messages.UNAUTHORIZED });
+  }
+  return res.status(200).json(history);
 }));
 
 export default router;

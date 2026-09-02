@@ -183,15 +183,35 @@ model cardset {
 }
 
 model collection {
-  id           Int            @id @default(autoincrement())
-  playerid     Int
-  active       Boolean        @default(true)
-  percent      Decimal?       @db.Decimal(5, 4)
-  name         String?
-  card         card[]
-  player       player         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "collection_player")
-  payment      payment[]
-  sale         sale[]
+  id               Int              @id @default(autoincrement())
+  playerid         Int
+  active           Boolean          @default(true)
+  percent          Decimal?         @db.Decimal(5, 4)
+  name             String?
+  card             card[]
+  player           player           @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "collection_player")
+  payment          payment[]
+  sale             sale[]
+  creditadjustment creditadjustment[]
+}
+
+/// A manual change to a consignor's store credit, made by the shop from the
+/// Usuarios page — a goodwill grant, a correction, or a deduction. Store credit
+/// is otherwise DERIVED from sales (Σ unpaid net); these signed deltas add to
+/// that sum, and spending draws them down too (a spend writes a negative row),
+/// so a manual credit behaves exactly like sale credit at the counter.
+model creditadjustment {
+  id           Int        @id @default(autoincrement())
+  collectionid Int
+  /// Signed dollars: positive grants credit, negative removes it (and a spend
+  /// at the counter records the amount taken as a negative row).
+  amount       Decimal    @db.Decimal(10, 2)
+  date         Int
+  /// Why the shop made the change — shown in the customer's ledger later.
+  note         String?
+  collection   collection @relation(fields: [collectionid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "creditadjustment_collection")
+
+  @@index([collectionid])
 }
 
 model login {
@@ -216,12 +236,15 @@ model payment {
 
 model player {
   id           Int          @id @default(autoincrement())
-  /// Unique — one account per handle. The register route also refuses
-  /// case-insensitive lookalikes before this constraint ever fires.
-  username     String       @unique
+  /// RETIRED (2026-09-02, Federico): accounts no longer have a username —
+  /// login is by email. Kept nullable so existing rows keep their old value
+  /// and nothing has to be dropped; new accounts leave it null. Still @unique,
+  /// which a nullable column allows (Postgres permits many NULLs). Can be
+  /// dropped physically in a later cleanup.
+  username     String?      @unique
   name         String
   /// Unique, stored lowercased (the routes normalise on write), so the
-  /// constraint IS case-insensitive in practice. Also a login identifier.
+  /// constraint IS case-insensitive in practice. THE login identifier.
   email        String       @unique
   /// What this account may do. Replaces the old `superuser` boolean, which
   /// could not express the difference between someone who works the counter
@@ -231,6 +254,9 @@ model player {
   /// staff    — everything a shop hand needs: sell, stock, storage, orders.
   /// owner    — staff, plus money (payouts), pricing policy and user roles.
   role         playerrole   @default(customer)
+  /// Cellphone, free-form. Optional; editable by the shop from the Usuarios
+  /// page. Not an identifier (email is) and not verified.
+  phone        String?
   passwordhash String
   collection   collection[]
   storage      storage[]
@@ -371,6 +397,11 @@ model order {
   created   Int
   expires   Int?
   closed    Int?
+  /// How much of this completed purchase was paid with the buyer's store
+  /// credit (dollars), the rest being cash. Set when the order is completed
+  /// with `paywithcredit`. 0 on a plain cash purchase and on orders completed
+  /// before the split was recorded, which read as "all cash".
+  creditused Decimal    @default(0) @db.Decimal(10, 2)
   player    player?     @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "order_player")
   orderline orderline[]
 
@@ -580,6 +611,12 @@ model fixedprice {
   scryfallid  String      @id
   price       Decimal?    @db.Decimal(10, 2)
   buyprice    Decimal?    @db.Decimal(10, 2)
+  /// A SOFT pin: the fixed price is a stand-in used only while CardKingdom has
+  /// no reference for this printing. When a reference appears, CardKingdom
+  /// wins — the pinned rows are left UNLOCKED so the nightly sync can take
+  /// over. A hard pin (the default, false) is authoritative and locks its
+  /// rows, exactly as before.
+  revert      Boolean     @default(false)
   updated     Int
   cardgeneral cardgeneral @relation(fields: [scryfallid], references: [scryfallid], onDelete: Cascade, onUpdate: NoAction, map: "fixedprice_cardgeneral")
 }
