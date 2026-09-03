@@ -18,7 +18,7 @@ import {
   consumeCredit,
   ZERO as CREDIT_ZERO,
 } from "../services/credit.js";
-import { applyReferencePrices } from "../services/pricing.js";
+import { applyReferencePrices, pinnedSell } from "../services/pricing.js";
 import { buildPlayerHistory } from "../services/playerHistory.js";
 import { exchangeRate, setExchangeRate, toPesos } from "../services/exchange.js";
 import {
@@ -1698,6 +1698,13 @@ router.put(
 
     let count = 0;
     if (pinData.price !== undefined) {
+      // The pin obeys the $1 floor: a rare/mythic set below $1 sells at $1 with
+      // the pin kept as the commission base (baseprice).
+      const general = await prisma.cardgeneral.findUnique({
+        where: { scryfallid },
+        select: { rarity: true },
+      });
+      const { price, baseprice } = pinnedSell(pinData.price, general?.rarity ?? null);
       if (revert) {
         // Fill only the rows CardKingdom has not priced (price null), and
         // leave them unlocked so a future reference wins.
@@ -1708,15 +1715,15 @@ router.put(
             pricelocked: false,
             price: null,
           },
-          data: { price: pinData.price, baseprice: null, priceupdate: now },
+          data: { price, baseprice, priceupdate: now },
         });
         count += r.count;
       } else {
         const r = await prisma.card.updateMany({
           where: { scryfallid, collection: { active: true } },
           data: {
-            price: pinData.price,
-            baseprice: null,
+            price,
+            baseprice,
             pricelocked: true,
             priceupdate: now,
           },

@@ -59,6 +59,16 @@ function sellPricesFor(derived, rarity) {
   return { price: derived, baseprice: null };
 }
 
+// The same $1 floor for a HAND-SET price: a rare or mythic pinned below $1
+// still sells at $1, with the pin kept as the commission base (`baseprice`) so
+// the consignor is paid from the real price and the uplift is the store's —
+// exactly as for a CardKingdom-derived floor. Above $1, or a non-floored
+// rarity, the pin IS the price (baseprice null). Exported so every place that
+// stamps a fixed price onto a card obeys the floor.
+export function pinnedSell(pinPrice, rarity) {
+  return sellPricesFor(new Prisma.Decimal(pinPrice), rarity);
+}
+
 // Decimal-or-null equality, for deciding whether a row actually changed.
 function sameMoney(a, b) {
   if (a === null || a === undefined) return b === null || b === undefined;
@@ -77,15 +87,18 @@ export async function applyFixedPrice(db, card) {
   if (!card?.scryfallid) return null;
   const pin = await db.fixedprice.findUnique({
     where: { scryfallid: card.scryfallid },
+    include: { cardgeneral: { select: { rarity: true } } },
   });
   if (!pin) return null;
 
   const now = Math.round(Date.now() / 1000);
   const data = {};
   if (pin.price !== null) {
-    data.price = pin.price;
-    // A hand-set price IS the real price — no floor uplift to account for.
-    data.baseprice = null;
+    // A hand-set price obeys the $1 floor too: a rare/mythic pinned below $1
+    // sells at $1 with the pin as the commission base.
+    const { price, baseprice } = pinnedSell(pin.price, pin.cardgeneral?.rarity ?? null);
+    data.price = price;
+    data.baseprice = baseprice;
     // A SOFT pin leaves the row UNLOCKED so the nightly sync can hand it over
     // to CardKingdom once a reference appears; a hard pin locks it.
     data.pricelocked = !pin.revert;
@@ -138,13 +151,14 @@ export async function quotePrintings(prisma, printings) {
     const finish = (printing.finishes ?? [])[0] ?? "nonfoil";
     const reference = referenceFor.get(`${printing.scryfallid}:${finish}`);
     const pin = pinFor.get(printing.scryfallid);
+    const rarity = printing.rarity ?? null;
     // A hard pin wins outright; a soft pin (revert) only while CardKingdom has
-    // no reference — once it does, the quote follows the market.
+    // no reference — once it does, the quote follows the market. Either way the
+    // $1 floor applies to a cheap rare/mythic.
     if (pin?.price != null && (!pin.revert || reference?.retail == null)) {
-      quotes.set(printing.scryfallid, pin.price);
+      quotes.set(printing.scryfallid, pinnedSell(pin.price, rarity).price);
       continue;
     }
-    const rarity = printing.rarity ?? null;
     const derived =
       reference?.retail != null
         ? toNickel(reference.retail.mul(sellMultiplier))
@@ -288,9 +302,16 @@ export async function applyReferencePrices(
           },
         }
       : {},
+    include: { cardgeneral: { select: { rarity: true } } },
   });
   for (const pin of pins) {
     const rowScope = onlyCardIds ? { id: { in: onlyCardIds } } : {};
+    // The pin obeys the $1 floor: a cheap rare/mythic sells at $1 with the pin
+    // as the commission base. One rarity per printing, so one result per pin.
+    const { price: pinPrice, baseprice: pinBase } = pinnedSell(
+      pin.price ?? 0,
+      pin.cardgeneral?.rarity ?? null
+    );
     if (pin.price !== null && pin.revert) {
       // SOFT pin: only a fallback for rows CardKingdom has not priced. The main
       // loop above already set the CardKingdom price on any unlocked row that
@@ -305,7 +326,7 @@ export async function applyReferencePrices(
           pricelocked: false,
           price: null,
         },
-        data: { price: pin.price, baseprice: null, priceupdate: now },
+        data: { price: pinPrice, baseprice: pinBase, priceupdate: now },
       });
       pinned += count;
     } else if (pin.price !== null) {
@@ -313,8 +334,8 @@ export async function applyReferencePrices(
       const { count } = await prisma.card.updateMany({
         where: { ...rowScope, scryfallid: pin.scryfallid, pricelocked: false },
         data: {
-          price: pin.price,
-          baseprice: null,
+          price: pinPrice,
+          baseprice: pinBase,
           pricelocked: true,
           priceupdate: now,
         },
