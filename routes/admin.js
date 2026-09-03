@@ -1351,6 +1351,125 @@ router.post(
   })
 );
 
+// --------------------------------------------------------------------------
+// Prepare queue: pending customer orders (from a confirmed cart) whose copies
+// are reserved but not yet physically pulled. One row per copy still to fetch,
+// with where it sits, so the shop can separate them card by card. When the
+// last copy of an order is pulled, the customer is told it is ready.
+// --------------------------------------------------------------------------
+router.get(
+  "/prepare",
+  asyncHandler(async (req, res) => {
+    const prisma = req.prisma;
+    await releaseExpiredOrders(prisma);
+
+    const orders = await prisma.order.findMany({
+      where: { status: "pending", playerid: { not: null } },
+      include: {
+        player: { select: { id: true, name: true } },
+        orderline: {
+          include: {
+            card: { include: { cardgeneral: true } },
+            // The copies claimed onto this line, with where each one sits.
+            cardplacement: { include: LOCATION_INCLUDE },
+          },
+        },
+      },
+      orderBy: { created: "asc" },
+    });
+
+    const result = [];
+    for (const order of orders) {
+      const copies = [];
+      for (const line of order.orderline) {
+        for (const pl of line.cardplacement) {
+          if (pl.pulled) continue; // already fetched into the bag
+          copies.push({
+            placementid: pl.id,
+            lineid: line.id,
+            cardid: line.cardid,
+            name: line.card?.cardgeneral?.name ?? null,
+            cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
+            image: line.card?.cardgeneral?.image ?? null,
+            variant: line.card?.variant ?? null,
+            kind: line.kind,
+            price: line.price,
+            location: describeLocation(pl),
+          });
+        }
+      }
+      if (copies.length) {
+        result.push({
+          orderid: order.id,
+          playerid: order.playerid,
+          name: order.player?.name ?? null,
+          created: order.created,
+          copies,
+        });
+      }
+    }
+    return res.status(200).json(result);
+  })
+);
+
+// Mark one reserved copy as physically pulled into the bag.
+router.post(
+  "/prepare/:placementId/pull",
+  [check("placementId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const placementId = parseInt(req.params.placementId, 10);
+
+    const outcome = await prisma.$transaction(async (tx) => {
+      const pl = await tx.cardplacement.findUnique({
+        where: { id: placementId },
+        include: {
+          orderline: {
+            include: {
+              order: { select: { id: true, playerid: true, status: true } },
+            },
+          },
+        },
+      });
+      const order = pl?.orderline?.order;
+      if (!pl || !pl.orderlineid || !order || order.status !== "pending") {
+        return { notFound: true };
+      }
+      if (!pl.pulled) {
+        await tx.cardplacement.update({
+          where: { id: placementId },
+          data: { pulled: true },
+        });
+      }
+      // Ready to pick up once nothing on the order is left unpulled. Told once,
+      // at the last copy, so a three-card order is not announced three times.
+      const remaining = await tx.cardplacement.count({
+        where: { orderline: { is: { orderid: order.id } }, pulled: false },
+      });
+      if (remaining === 0 && order.playerid) {
+        await tx.notification.create({
+          data: {
+            playerid: order.playerid,
+            kind: "order_ready",
+            orderid: order.id,
+            created: nowSeconds(),
+          },
+        });
+      }
+      return { ready: remaining === 0 };
+    });
+
+    if (outcome.notFound) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    return res.status(200).json({ message: messages.MATCH_SET_ASIDE, ready: outcome.ready });
+  })
+);
+
 // How fresh the ingested data is. Cheap to call; reads only the run log.
 router.get(
   "/syncstatus",

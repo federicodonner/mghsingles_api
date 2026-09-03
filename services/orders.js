@@ -73,6 +73,97 @@ export {
 } from "./availability.js";
 
 import { storeDisplayName } from "./locations.js";
+import { exchangeRate, toPesos } from "./exchange.js";
+
+// Reserve copies of a card into a customer's pick-up bag — the direct-purchase
+// path a confirmed cart takes, independent of the wishlist. Finds (or opens)
+// the customer's one pending order, grows the card's line by `count`, and
+// claims that many free for-sale copies onto the line as NOT-yet-pulled
+// (`pulled: false`): the stock is held at once and the copies leave their
+// pockets, but the shop still has to physically fetch them — the "Pedidos para
+// preparar" queue is what sends someone to do it, flipping each to pulled.
+//
+// Price is frozen now (a later reprice cannot change what was quoted), the peso
+// side at today's rate. `rate` is passed so a whole cart freezes at one rate.
+export async function reserveIntoBag(tx, playerId, card, count, rate) {
+  let bag = await tx.order.findFirst({
+    where: { playerid: playerId, status: "pending" },
+    orderBy: { created: "asc" },
+  });
+  if (!bag) {
+    bag = await tx.order.create({
+      data: {
+        playerid: playerId,
+        status: "pending",
+        created: nowSeconds(),
+        expires: expiryFromNow(),
+      },
+    });
+  }
+
+  const price = card.price ?? 0;
+  const pricepesos = toPesos(Number(price), rate);
+  const baseprice = card.baseprice ?? null;
+
+  const existing = await tx.orderline.findFirst({
+    where: { orderid: bag.id, cardid: card.id },
+  });
+  let lineId;
+  if (existing) {
+    await tx.orderline.update({
+      where: { id: existing.id },
+      data: { quantity: existing.quantity + count },
+    });
+    lineId = existing.id;
+  } else {
+    const created = await tx.orderline.create({
+      data: {
+        orderid: bag.id,
+        cardid: card.id,
+        quantity: count,
+        price,
+        pricepesos,
+        baseprice,
+        kind: "purchase",
+      },
+    });
+    lineId = created.id;
+  }
+
+  // Claim `count` specific free copies onto the line, nearest-to-hand first, so
+  // the prepare queue can show exactly where each one is. They keep their
+  // placement (so a cancel refiles them) and are excluded from pocket views.
+  const free = await tx.cardplacement.findMany({
+    where: {
+      cardid: card.id,
+      orderlineid: null,
+      storage: { state: "for_sale" },
+    },
+    orderBy: [
+      { page: "asc" },
+      { pocket: "asc" },
+      { sequence: "asc" },
+      { id: "asc" },
+    ],
+    take: count,
+  });
+  for (const pl of free) {
+    await tx.cardplacement.update({
+      where: { id: pl.id },
+      data: { orderlineid: lineId, pulled: false },
+    });
+  }
+  return bag;
+}
+
+// Whether a pending order is still being assembled: any copy claimed onto it
+// has not been physically pulled yet. Expects the order's lines with their
+// cardplacements' `pulled` selected.
+export function orderIsPreparing(order) {
+  return (order.orderline ?? []).some((line) =>
+    (line.cardplacement ?? []).some((pl) => pl.pulled === false)
+  );
+}
 
 // The card's display identity, to freeze onto an order line at completion so a
 // completed order still shows its cards after the stock row (`card`) is deleted

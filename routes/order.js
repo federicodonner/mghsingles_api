@@ -17,6 +17,7 @@ import {
   nowSeconds,
   lineDisplay,
   snapshotOrderLines,
+  orderIsPreparing,
 } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 import { exchangeRate, toPesos } from "../services/exchange.js";
@@ -29,6 +30,9 @@ const LINE_INCLUDE = {
       cardlanguage: { select: { name: true } },
     },
   },
+  // Just the pulled flags of the copies claimed onto the line, to tell an order
+  // still being assembled from one ready to pick up.
+  cardplacement: { select: { pulled: true } },
 };
 
 function describeOrder(order) {
@@ -57,6 +61,9 @@ function describeOrder(order) {
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
     totalpesos: totalPesosOf(order),
+    // A pending order the shop has not finished pulling yet — shown to the
+    // customer as "being prepared" instead of "ready to pick up".
+    preparing: order.status === "pending" && orderIsPreparing(order),
   };
 }
 

@@ -1,19 +1,19 @@
 // A customer's shopping cart. Mounted at /cart behind `authentication`.
 //
 // The cart is the pause between wanting and asking: rows here hold NO stock
-// and the shop hears nothing about them. Only confirming turns each row into
-// the pinned wishlist match a storefront buy used to raise on the spot, which
-// is what lands on the shop's "Cartas para apartar" queue. That also means a
-// cart can go stale — somebody else may buy the copy first — so availability
+// and the shop hears nothing about them. Only confirming reserves the copies —
+// it opens (or grows) the customer's pending order, which they see right away
+// in Pedidos as "being prepared" and which lands on the shop's prepare queue.
+// A cart can go stale — somebody else may buy the copy first — so availability
 // is re-checked at confirmation and reported honestly, not assumed.
 import { Router } from "express";
 var router = Router();
 import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
-import { releaseExpiredOrders, nowSeconds } from "../services/orders.js";
+import { releaseExpiredOrders, nowSeconds, reserveIntoBag } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
-import { raisePinnedMatch } from "../services/matches.js";
+import { exchangeRate } from "../services/exchange.js";
 
 // The most copies of one card a cart line may hold. Confirmation loops this
 // many times per line (each iteration is several DB round-trips), so it is a
@@ -253,29 +253,32 @@ router.post(
       prisma,
       items.map((i) => i.card)
     );
+    const rate = await exchangeRate(prisma);
 
     const confirmed = [];
     const unavailable = [];
-    for (const item of items) {
-      const card = item.card;
-      const name = card?.cardgeneral?.name ?? null;
-      const sellable = Boolean(card?.approved && card?.collection?.active);
-      const available = sellable ? availableOf(card, reserved, offSale) : 0;
-      // All or nothing PER ROW: asking the shop to pull two of three wanted
-      // copies would leave a quantity silently shrunk. The row stays whole in
-      // the cart and the shortage is reported instead.
-      if (available < item.quantity) {
-        unavailable.push({ name, wanted: item.quantity, available });
-        continue;
+    // Confirming turns each still-available row into a reserved line on the
+    // customer's pending order — the direct-purchase path, no longer routed
+    // through the wishlist. The order shows up at once in the customer's
+    // Pedidos ("la tienda lo está preparando") and on the shop's prepare queue.
+    await prisma.$transaction(async (tx) => {
+      for (const item of items) {
+        const card = item.card;
+        const name = card?.cardgeneral?.name ?? null;
+        const sellable = Boolean(card?.approved && card?.collection?.active);
+        const available = sellable ? availableOf(card, reserved, offSale) : 0;
+        // All or nothing PER ROW: reserving two of three wanted copies would
+        // leave a quantity silently shrunk. The row stays whole in the cart and
+        // the shortage is reported instead.
+        if (available < item.quantity) {
+          unavailable.push({ name, wanted: item.quantity, available });
+          continue;
+        }
+        await reserveIntoBag(tx, playerId, card, item.quantity, rate);
+        confirmed.push({ name, quantity: item.quantity });
+        await tx.cartitem.delete({ where: { id: item.id } });
       }
-      // One raise per copy — byte-for-byte what N presses of the old instant
-      // buy button did, so the wanted quantity accumulates the same way.
-      for (let i = 0; i < item.quantity; i++) {
-        await raisePinnedMatch(prisma, playerId, card, { bumpWanted: true });
-      }
-      confirmed.push({ name, quantity: item.quantity });
-      await prisma.cartitem.delete({ where: { id: item.id } });
-    }
+    });
 
     return res.status(200).json({
       message: confirmed.length ? messages.CARD_RESERVED_FOR_YOU : messages.ORDER_NOT_ENOUGH_STOCK,
