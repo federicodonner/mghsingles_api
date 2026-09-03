@@ -77,9 +77,10 @@ router.post(
       });
 
       // After the user is inserted, create a collection and add it to it
-      // The new player id is returned from the insert statement
+      // The new player id is returned from the insert statement.
+      // 0.25 = the shop's standard consignment cut (was 0.30 until 2026-09-02).
       const newCollection = await prisma.collection.create({
-        data: { playerid: newPlayer.id, percent: 0.3 },
+        data: { playerid: newPlayer.id, percent: 0.25 },
       });
 
       // After the user is inserted, create a login record and return it

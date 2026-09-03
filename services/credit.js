@@ -17,11 +17,13 @@ export const ZERO = new Decimal(0);
 const round2 = (value) =>
   new Decimal(value).toDecimalPlaces(2, Decimal.ROUND_HALF_UP);
 
-// The consignor's share of one sale.
+// The consignor's share of one sale: the line total minus the store's cut
+// (`percent`), the cut rounded first and the share the remainder.
 //
-// Computed from `baseprice` — the card's REAL price — when the customer was
-// charged more than that (the $1 floor on cheap rares). The consignor's cut
-// follows the market value of their card; the uplift is the store's.
+// Paid on the ACTUAL selling price. `baseprice` is a LEGACY commission base:
+// until 2026-09-02 a floored rare paid its consignor on the card's real sub-$1
+// price instead, and sales made before then still carry it — so it is honoured
+// when present; new sales leave it null and fall through to `price`.
 export function saleNet(sale) {
   const lineTotal = new Decimal(sale.baseprice ?? sale.price).mul(
     sale.quantity

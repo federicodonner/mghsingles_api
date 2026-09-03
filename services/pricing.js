@@ -47,24 +47,26 @@ const DEFAULT_SELL = { common: "0.35", uncommon: "0.50" };
 
 const ONE_DOLLAR = new Prisma.Decimal(1);
 
-// Cheap rares and mythics sell at a $1 minimum. The card's REAL price rides
-// along in `baseprice` because the consignor's share is computed from it —
-// the uplift to $1 is the store's, not the consignor's.
+// Cheap rares and mythics sell at a $1 minimum. The consignor is paid their
+// share of the ACTUAL selling price ($1), like any other card, so there is no
+// separate commission base to record — `baseprice` stays null. (Until
+// 2026-09-02 the consignor was paid on the card's real sub-$1 price and the $1
+// uplift was the store's; sales made before then still carry that baseprice
+// and keep their original basis.)
 const FLOORED_RARITIES = new Set(["rare", "mythic"]);
 
 function sellPricesFor(derived, rarity) {
   if (FLOORED_RARITIES.has(rarity) && derived.lt(ONE_DOLLAR)) {
-    return { price: ONE_DOLLAR, baseprice: derived };
+    return { price: ONE_DOLLAR, baseprice: null };
   }
   return { price: derived, baseprice: null };
 }
 
 // The same $1 floor for a HAND-SET price: a rare or mythic pinned below $1
-// still sells at $1, with the pin kept as the commission base (`baseprice`) so
-// the consignor is paid from the real price and the uplift is the store's —
-// exactly as for a CardKingdom-derived floor. Above $1, or a non-floored
-// rarity, the pin IS the price (baseprice null). Exported so every place that
-// stamps a fixed price onto a card obeys the floor.
+// still sells at $1. The consignor is paid on that actual $1 (no separate
+// commission base — baseprice null), exactly as for a CardKingdom-derived
+// floor. Exported so every place that stamps a fixed price onto a card obeys
+// the floor.
 export function pinnedSell(pinPrice, rarity) {
   return sellPricesFor(new Prisma.Decimal(pinPrice), rarity);
 }
