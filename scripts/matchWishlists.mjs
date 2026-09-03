@@ -98,6 +98,11 @@ async function main() {
       // purchase, so never auto-bought.
       const kind =
         card.collection?.playerid === entry.playerid ? "withdrawal" : "purchase";
+      // A card with no price cannot be sold — customers do not even see it in
+      // the store — so it must not raise a purchase match (or an auto-buy)
+      // until the shop prices it. A withdrawal goes home for free, so price is
+      // irrelevant there.
+      if (kind === "purchase" && card.price == null) continue;
       if (kind === "purchase" && entry.autobuy) {
         const already = reservedForWish.get(entry.id) ?? 0;
         const need = entry.quantity - already;
