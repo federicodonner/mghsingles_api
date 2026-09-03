@@ -15,6 +15,8 @@ import {
   refileOrder,
   expiryFromNow,
   nowSeconds,
+  lineDisplay,
+  snapshotOrderLines,
 } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 import { exchangeRate, toPesos } from "../services/exchange.js";
@@ -44,11 +46,7 @@ function describeOrder(order) {
       price: line.price,
       pricepesos: line.pricepesos,
       kind: line.kind,
-      name: line.card?.cardgeneral?.name ?? null,
-      cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
-      cardsetname: line.card?.cardgeneral?.cardsetname ?? null,
-      image: line.card?.cardgeneral?.image ?? null,
-      variant: line.card?.variant ?? null,
+      ...lineDisplay(line),
       condition: line.card?.cardcondition?.name ?? null,
       language: line.card?.cardlanguage?.name ?? null,
     })),
@@ -247,6 +245,9 @@ router.delete(
         data: { needsrefile: true },
       });
       await refileOrder(tx, id);
+      // Freeze the cards onto the lines: a cancelled order is history too, and
+      // its refiled cards can later sell out and be deleted.
+      await snapshotOrderLines(tx, id);
       await tx.order.update({
         where: { id },
         data: { status: "cancelled", closed: nowSeconds() },

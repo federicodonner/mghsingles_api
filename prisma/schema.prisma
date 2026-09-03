@@ -417,7 +417,11 @@ model order {
 model orderline {
   id       Int     @id @default(autoincrement())
   orderid  Int
-  cardid   Int
+  /// Nullable and SET NULL on the card's deletion (was a required column with
+  /// ON DELETE CASCADE, which erased a completed order's line the moment its
+  /// card's last copy sold out — see the `card*` snapshot below). Pending lines
+  /// always have it; a sold-out completed line keeps everything but this link.
+  cardid   Int?
   quantity Int
   price    Decimal @db.Decimal(10, 2)
   /// The same quote in pesos, at the exchange rate of the day the copy was
@@ -433,8 +437,18 @@ model orderline {
   /// card out of their OWN consigned collection: it leaves stock, but no money
   /// changes hands and no sale row is written, because there is nobody to pay.
   kind     orderlinekind @default(purchase)
+  /// The card's identity, frozen onto the line when the order is completed, so
+  /// the line still shows its card after the stock row (`card`) is deleted.
+  /// Null on pending lines and on completed lines from before this snapshot
+  /// existed; both fall back to the live `card` join while it survives.
+  cardname    String?
+  cardsetcode String?
+  cardsetname String?
+  cardimage   String?
+  /// The printing's finish (foil etc.), frozen alongside the name.
+  variant     String?
   order    order   @relation(fields: [orderid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "orderline_order")
-  card     card    @relation(fields: [cardid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "orderline_card")
+  card     card?   @relation(fields: [cardid], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "orderline_card")
   /// Where the copies in this line came from, so a cancellation can refile them.
   cardplacement cardplacement[]
 

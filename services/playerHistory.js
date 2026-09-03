@@ -71,8 +71,10 @@ export async function buildPlayerHistory(prisma, playerId) {
       totalpesos: totalpesos != null ? String(totalpesos) : null,
       creditused: creditused.toFixed(2),
       items: bought.map((l) => ({
-        name: l.card?.cardgeneral?.name ?? null,
-        cardsetcode: l.card?.cardgeneral?.cardsetcode ?? null,
+        // The line's frozen snapshot (a sold-out card's stock row is gone),
+        // falling back to the live card for lines that predate it.
+        name: l.cardname ?? l.card?.cardgeneral?.name ?? null,
+        cardsetcode: l.cardsetcode ?? l.card?.cardgeneral?.cardsetcode ?? null,
         quantity: l.quantity,
       })),
     });

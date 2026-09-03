@@ -13,6 +13,7 @@
     "match:wishlists": "node -r dotenv/config scripts/matchWishlists.mjs",
     "sync:prices": "node -r dotenv/config scripts/syncPrices.mjs",
     "backfill:orderpesos": "node -r dotenv/config scripts/backfillOrderPesos.mjs",
+    "backfill:cardsnapshot": "node -r dotenv/config scripts/backfillOrderCardSnapshot.mjs",
     "seed:dev": "node -r dotenv/config scripts/seedDev.mjs && npm run match:wishlists"
   },
   "repository": {

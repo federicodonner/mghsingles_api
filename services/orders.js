@@ -74,6 +74,63 @@ export {
 
 import { storeDisplayName } from "./locations.js";
 
+// The card's display identity, to freeze onto an order line at completion so a
+// completed order still shows its cards after the stock row (`card`) is deleted
+// — a card whose last copy leaves the shop is removed, which used to erase the
+// line (ON DELETE CASCADE) and now would blank its name/set. Expects a card
+// loaded with its cardgeneral.
+export function cardSnapshot(card) {
+  return {
+    cardname: card?.cardgeneral?.name ?? null,
+    cardsetcode: card?.cardgeneral?.cardsetcode ?? null,
+    cardsetname: card?.cardgeneral?.cardsetname ?? null,
+    cardimage: card?.cardgeneral?.image ?? null,
+    variant: card?.variant ?? null,
+  };
+}
+
+// What a line shows: its frozen snapshot when it has one (a completed order,
+// whose card may be gone), else the live card (a pending order, or an old
+// completed line predating the snapshot, while its card still exists).
+export function lineDisplay(line) {
+  return {
+    name: line.cardname ?? line.card?.cardgeneral?.name ?? null,
+    cardsetcode: line.cardsetcode ?? line.card?.cardgeneral?.cardsetcode ?? null,
+    cardsetname: line.cardsetname ?? line.card?.cardgeneral?.cardsetname ?? null,
+    image: line.cardimage ?? line.card?.cardgeneral?.image ?? null,
+    variant: line.variant ?? line.card?.variant ?? null,
+  };
+}
+
+// Freeze every line's card identity for an order leaving pending (completed or
+// cancelled), so the lines keep their name/set after their cards are later
+// deleted. The completion route does this inline (it already has the cards
+// loaded); the cancel paths call this.
+export async function snapshotOrderLines(tx, orderId) {
+  const lines = await tx.orderline.findMany({
+    where: { orderid: orderId },
+    include: {
+      card: {
+        include: {
+          cardgeneral: {
+            select: {
+              name: true,
+              cardsetcode: true,
+              cardsetname: true,
+              image: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  for (const line of lines) {
+    await tx.orderline.update({
+      where: { id: line.id },
+      data: cardSnapshot(line.card),
+    });
+  }
+}
 
 // Put a cancelled or expired order's cards back where they came from.
 //

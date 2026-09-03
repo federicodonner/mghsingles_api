@@ -36,6 +36,9 @@ import {
   refileInstructions,
   nowSeconds,
   expiryFromNow,
+  cardSnapshot,
+  lineDisplay,
+  snapshotOrderLines,
 } from "../services/orders.js";
 
 // Every consignor's money position, grouped by person — what the Pagar page
@@ -430,10 +433,7 @@ function describeOrder(order) {
       price: line.price,
       pricepesos: line.pricepesos,
       kind: line.kind,
-      name: line.card?.cardgeneral?.name ?? null,
-      cardsetcode: line.card?.cardgeneral?.cardsetcode ?? null,
-      image: line.card?.cardgeneral?.image ?? null,
-      variant: line.card?.variant ?? null,
+      ...lineDisplay(line),
       condition: line.card?.cardcondition?.name ?? null,
       language: line.card?.cardlanguage?.name ?? null,
     })),
@@ -508,7 +508,14 @@ router.post(
           include: {
             card: {
               include: {
-                cardgeneral: { select: { name: true } },
+                cardgeneral: {
+                  select: {
+                    name: true,
+                    cardsetcode: true,
+                    cardsetname: true,
+                    image: true,
+                  },
+                },
                 collection: { select: { percent: true } },
               },
             },
@@ -553,6 +560,13 @@ router.post(
     const settlement = await prisma.$transaction(async (tx) => {
       for (const line of order.orderline) {
         const placementIds = line.cardplacement.map((pl) => pl.id);
+        // Freeze the card's identity onto the line before recordSale/
+        // recordWithdrawal can delete a sold-out card's stock row — otherwise
+        // the SET NULL takes the line's name and set with it.
+        await tx.orderline.update({
+          where: { id: line.id },
+          data: cardSnapshot(line.card),
+        });
         if (line.kind === "withdrawal") {
           // The customer's own consigned card going home. No sale row, because
           // there is no buyer and nobody to pay out — writing one would credit
@@ -752,6 +766,9 @@ router.post(
         data: { needsrefile: true },
       });
       await refileOrder(tx, id);
+      // Freeze the cards onto the lines: a cancelled order is history too, and
+      // its refiled cards can later sell out and be deleted.
+      await snapshotOrderLines(tx, id);
       await tx.order.update({
         where: { id },
         data: { status: "cancelled", closed: nowSeconds() },
