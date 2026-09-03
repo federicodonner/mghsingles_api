@@ -20,8 +20,9 @@
 // entry is deleted, or the customer narrows their constraints past it.
 import { createPrismaClient } from "../services/prisma.js";
 import { matches } from "../routes/wishlist.js";
-import { releaseExpiredOrders } from "../services/orders.js";
+import { releaseExpiredOrders, reserveIntoBag } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
+import { exchangeRate } from "../services/exchange.js";
 
 const prisma = createPrismaClient();
 const DRY_RUN = process.argv.includes("--dry-run");
@@ -66,22 +67,54 @@ async function main() {
     byName.get(key).push(card);
   }
 
-  // What should exist right now.
-  const wanted = new Map();
+  // How many copies each auto-buy wish already has reserved on a pending order,
+  // so a wish is not bought twice across runs.
+  const autobuyIds = entries.filter((e) => e.autobuy).map((e) => e.id);
+  const reservedForWish = new Map();
+  if (autobuyIds.length) {
+    const rows = await prisma.orderline.groupBy({
+      by: ["wishlistid"],
+      where: { wishlistid: { in: autobuyIds }, order: { is: { status: "pending" } } },
+      _sum: { quantity: true },
+    });
+    for (const r of rows) reservedForWish.set(r.wishlistid, r._sum.quantity ?? 0);
+  }
+
+  // Two outcomes for an available card:
+  //   - an ordinary MATCH the shop confirms and pulls (wantedMatches), or
+  //   - an AUTO-BUY reservation made on the customer's behalf (autobuyPlan).
+  // `reservedNow` tracks what this run has already claimed so two wishes cannot
+  // both reserve the last copy.
+  const wantedMatches = new Map();
+  const autobuyPlan = [];
+  const reservedNow = new Map();
   for (const entry of entries) {
     for (const card of byName.get(entry.name.toLowerCase()) ?? []) {
-      if (availableOf(card, reserved, offSale) <= 0) continue;
+      const free =
+        availableOf(card, reserved, offSale) - (reservedNow.get(card.id) ?? 0);
+      if (free <= 0) continue;
       if (!matches(entry, card)) continue;
-      wanted.set(`${entry.id}:${card.id}`, {
-        wishlistid: entry.id,
-        cardid: card.id,
-        playerid: entry.playerid,
-        // The customer's own consigned card is theirs to take back.
-        kind:
-          card.collection?.playerid === entry.playerid
-            ? "withdrawal"
-            : "purchase",
-      });
+      // The customer's own consigned card is theirs to take back — never a
+      // purchase, so never auto-bought.
+      const kind =
+        card.collection?.playerid === entry.playerid ? "withdrawal" : "purchase";
+      if (kind === "purchase" && entry.autobuy) {
+        const already = reservedForWish.get(entry.id) ?? 0;
+        const need = entry.quantity - already;
+        if (need <= 0) continue; // the wish is already fully reserved
+        const take = Math.min(need, free);
+        if (take <= 0) continue;
+        autobuyPlan.push({ entry, card, count: take });
+        reservedNow.set(card.id, (reservedNow.get(card.id) ?? 0) + take);
+        reservedForWish.set(entry.id, already + take);
+      } else {
+        wantedMatches.set(`${entry.id}:${card.id}`, {
+          wishlistid: entry.id,
+          cardid: card.id,
+          playerid: entry.playerid,
+          kind,
+        });
+      }
     }
   }
 
@@ -92,13 +125,16 @@ async function main() {
     existing.map((m) => `${m.wishlistid}:${m.cardid}`)
   );
 
-  const toCreate = [...wanted.entries()]
+  const toCreate = [...wantedMatches.entries()]
     .filter(([key]) => !existingKeys.has(key))
     .map(([, value]) => ({ ...value, found: started }));
 
   // An unresolved match that no longer holds is withdrawn rather than left to
-  // rot: the card sold, the entry was deleted, or the filters moved.
-  const stale = existing.filter((m) => !wanted.has(`${m.wishlistid}:${m.cardid}`));
+  // rot: the card sold, the entry was deleted, the filters moved, or the wish
+  // turned into an auto-buy reservation.
+  const stale = existing.filter(
+    (m) => !wantedMatches.has(`${m.wishlistid}:${m.cardid}`)
+  );
 
   if (!DRY_RUN) {
     if (toCreate.length) {
@@ -112,10 +148,20 @@ async function main() {
         where: { id: { in: stale.map((m) => m.id) } },
       });
     }
+    // Auto-buy: reserve each planned card into the customer's pending order,
+    // linked to the wish so pulling it later answers (and removes) the wish.
+    if (autobuyPlan.length) {
+      const rate = await exchangeRate(prisma);
+      for (const plan of autobuyPlan) {
+        await prisma.$transaction((tx) =>
+          reserveIntoBag(tx, plan.entry.playerid, plan.card, plan.count, rate, plan.entry.id)
+        );
+      }
+    }
     await prisma.syncrun.create({
       data: {
         source: "wishlist_match",
-        cards: toCreate.length,
+        cards: toCreate.length + autobuyPlan.length,
         sets: stale.length,
         ok: true,
         started,
@@ -126,13 +172,22 @@ async function main() {
 
   log(
     `${DRY_RUN ? "[dry run] " : ""}${entries.length} wishlist entries, ` +
-      `${wanted.size} live match(es): ${toCreate.length} new, ${stale.length} withdrawn`
+      `${wantedMatches.size} match(es): ${toCreate.length} new, ${stale.length} withdrawn; ` +
+      `${autobuyPlan.length} auto-buy reservation(s)`
   );
   for (const match of toCreate) {
     const entry = entries.find((e) => e.id === match.wishlistid);
     log(`  + ${entry?.player?.name} wants ${entry?.name} (${match.kind})`);
   }
-  return { found: toCreate.length, cleared: stale.length, entries: entries.length };
+  for (const plan of autobuyPlan) {
+    log(`  → auto-buy ${plan.count}× ${plan.entry.name} for ${plan.entry.player?.name}`);
+  }
+  return {
+    found: toCreate.length,
+    autobought: autobuyPlan.length,
+    cleared: stale.length,
+    entries: entries.length,
+  };
 }
 
 main()

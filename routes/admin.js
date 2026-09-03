@@ -1336,17 +1336,18 @@ router.post(
     const prisma = req.prisma;
     const id = parseInt(req.params.matchId, 10);
 
-    const match = await prisma.wishlistmatch.findUnique({ where: { id } });
+    const match = await prisma.wishlistmatch.findUnique({
+      where: { id },
+      select: { id: true, wishlistid: true, resolved: true },
+    });
     if (!match || match.resolved) {
       return res.status(404).json({ message: messages.MATCH_NOT_FOUND });
     }
 
-    // Resolved rather than deleted, so the next matcher run does not simply
-    // re-raise it.
-    await prisma.wishlistmatch.update({
-      where: { id },
-      data: { resolved: nowSeconds(), resolution: "dismissed" },
-    });
+    // The customer decided against it: remove the WISH itself (its matches
+    // cascade), so the matcher does not simply raise it again next run.
+    // Dismissing only this match would re-appear in ten minutes.
+    await prisma.wishlist.delete({ where: { id: match.wishlistid } });
     return res.status(200).json({ message: messages.MATCH_DISMISSED });
   })
 );
@@ -1444,6 +1445,18 @@ router.post(
           where: { id: placementId },
           data: { pulled: true },
         });
+      }
+      // An auto-buy line, once fully pulled, has answered its wish — remove it
+      // so the matcher stops raising it (SET NULL keeps the order line).
+      if (pl.orderline.wishlistid) {
+        const unpulledInLine = await tx.cardplacement.count({
+          where: { orderlineid: pl.orderlineid, pulled: false },
+        });
+        if (unpulledInLine === 0) {
+          await tx.wishlist.deleteMany({
+            where: { id: pl.orderline.wishlistid },
+          });
+        }
       }
       // Ready to pick up once nothing on the order is left unpulled. Told once,
       // at the last copy, so a three-card order is not announced three times.

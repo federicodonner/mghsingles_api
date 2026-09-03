@@ -447,6 +447,12 @@ model orderline {
   cardimage   String?
   /// The printing's finish (foil etc.), frozen alongside the name.
   variant     String?
+  /// The wishlist entry an auto-buy reservation is fulfilling, if any. Set when
+  /// the matcher reserves an auto-buy card; when the shop finishes pulling the
+  /// line, the entry is removed (the wish is answered). SET NULL on the entry's
+  /// deletion so the order outlives the wish.
+  wishlistid  Int?
+  wishlist    wishlist? @relation(fields: [wishlistid], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "orderline_wishlist")
   order    order   @relation(fields: [orderid], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "orderline_order")
   card     card?   @relation(fields: [cardid], references: [id], onDelete: SetNull, onUpdate: NoAction, map: "orderline_card")
   /// Where the copies in this line came from, so a cancellation can refile them.
@@ -471,6 +477,12 @@ model wishlist {
   /// is three clicks rather than a special case. Capped at 4 because that is
   /// the deck limit — wanting more is a different conversation than a wishlist.
   quantity Int    @default(1)
+  /// "Buy it for me automatically." When set, the matcher, on finding the card
+  /// in stock, reserves it into a pending order on the customer's behalf — as if
+  /// they had confirmed a cart — instead of leaving a match for the shop to
+  /// raise with them first. Only affects PURCHASE matches (you never auto-buy
+  /// your own card back).
+  autobuy  Boolean @default(false)
   /// Constraints, each independent of the others. An EMPTY list means "any" —
   /// so a customer can pin the printing while accepting any language, or accept
   /// any printing in only English or Spanish, foil only. Several values in one
@@ -485,6 +497,7 @@ model wishlist {
   player   player @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "wishlist_player")
 
   wishlistmatch wishlistmatch[]
+  orderline     orderline[]
 
   @@unique([playerid, name], map: "wishlist_player_name_unique")
 }

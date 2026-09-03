@@ -105,6 +105,7 @@ async function attachFinishes(prisma, entries) {
     name: entry.name,
     created: entry.created,
     quantity: entry.quantity,
+    autobuy: entry.autobuy,
     versions: entry.versions,
     languageids: entry.languageids,
     conditionids: entry.conditionids,
@@ -507,6 +508,9 @@ router.put(
     }
     if (req.body.quantity !== undefined) {
       data.quantity = readQuantity(req.body.quantity, entry.quantity);
+    }
+    if (req.body.autobuy !== undefined) {
+      data.autobuy = req.body.autobuy === true;
     }
     if (!Object.keys(data).length) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });

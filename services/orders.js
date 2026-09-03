@@ -85,7 +85,7 @@ import { exchangeRate, toPesos } from "./exchange.js";
 //
 // Price is frozen now (a later reprice cannot change what was quoted), the peso
 // side at today's rate. `rate` is passed so a whole cart freezes at one rate.
-export async function reserveIntoBag(tx, playerId, card, count, rate) {
+export async function reserveIntoBag(tx, playerId, card, count, rate, wishlistid = null) {
   let bag = await tx.order.findFirst({
     where: { playerid: playerId, status: "pending" },
     orderBy: { created: "asc" },
@@ -112,7 +112,12 @@ export async function reserveIntoBag(tx, playerId, card, count, rate) {
   if (existing) {
     await tx.orderline.update({
       where: { id: existing.id },
-      data: { quantity: existing.quantity + count },
+      data: {
+        quantity: existing.quantity + count,
+        // Keep the wishlist link if this reservation carries one and the line
+        // does not already have one.
+        ...(wishlistid && existing.wishlistid == null ? { wishlistid } : {}),
+      },
     });
     lineId = existing.id;
   } else {
@@ -125,6 +130,7 @@ export async function reserveIntoBag(tx, playerId, card, count, rate) {
         pricepesos,
         baseprice,
         kind: "purchase",
+        wishlistid,
       },
     });
     lineId = created.id;
