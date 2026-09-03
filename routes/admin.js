@@ -14,7 +14,7 @@ import recordSale, { recordWithdrawal } from "../services/sales.js";
 import {
   saleNet,
   saleRemaining,
-  creditFor,
+  creditBalances,
   consumeCredit,
   ZERO as CREDIT_ZERO,
 } from "../services/credit.js";
@@ -143,9 +143,9 @@ router.get(
   })
 );
 
-// A player's spendable store credit — what the store owes them, sale by sale.
-// The order-completion sidebar asks this before offering credit as a way to
-// pay.
+// A player's spendable balance, split: sale money ("dinero en la tienda") and
+// store credit. The order-completion sidebar asks this before offering credit
+// as a way to pay (spending store credit first, then sale money).
 router.get(
   "/credit/:playerId",
   [check("playerId").isNumeric()],
@@ -160,10 +160,13 @@ router.get(
       select: { id: true },
     });
     if (!collection) {
-      return res.status(200).json({ credit: "0.00" });
+      return res.status(200).json({ saleMoney: "0.00", storeCredit: "0.00" });
     }
-    const credit = await creditFor(prisma, collection.id);
-    return res.status(200).json({ credit: credit.toFixed(2) });
+    const { saleMoney, storeCredit } = await creditBalances(prisma, collection.id);
+    return res.status(200).json({
+      saleMoney: saleMoney.toFixed(2),
+      storeCredit: storeCredit.toFixed(2),
+    });
   })
 );
 
@@ -1944,14 +1947,15 @@ router.get(
       orderBy: [{ role: "asc" }, { name: "asc" }],
     });
 
-    // Credit only applies to customers, and it is the same derived value as
-    // creditFor — but computed for every customer at once in two grouped reads
-    // rather than a query per person.
+    // Credit only applies to customers, and it is the same split as
+    // creditBalances (sale money vs store credit) — but computed for every
+    // customer at once in two grouped reads rather than a query per person.
     const customerCollectionIds = players
       .filter((p) => p.role === "customer")
       .flatMap((p) => p.collection.map((c) => c.id));
 
-    const creditByCollection = new Map();
+    const saleMoneyByCollection = new Map();
+    const storeCreditByCollection = new Map();
     if (customerCollectionIds.length) {
       const [sales, adjustments] = await Promise.all([
         prisma.sale.findMany({
@@ -1971,32 +1975,34 @@ router.get(
         }),
       ]);
       for (const s of sales) {
-        const cur = creditByCollection.get(s.collectionid) ?? CREDIT_ZERO;
-        creditByCollection.set(s.collectionid, cur.add(saleRemaining(s)));
+        const cur = saleMoneyByCollection.get(s.collectionid) ?? CREDIT_ZERO;
+        saleMoneyByCollection.set(s.collectionid, cur.add(saleRemaining(s)));
       }
       for (const a of adjustments) {
-        const cur = creditByCollection.get(a.collectionid) ?? CREDIT_ZERO;
-        creditByCollection.set(a.collectionid, cur.add(a.amount));
+        const cur = storeCreditByCollection.get(a.collectionid) ?? CREDIT_ZERO;
+        storeCreditByCollection.set(a.collectionid, cur.add(a.amount));
       }
     }
 
+    const clampSum = (byCollection, collections) => {
+      let total = CREDIT_ZERO;
+      for (const c of collections) {
+        total = total.add(byCollection.get(c.id) ?? CREDIT_ZERO);
+      }
+      return (total.isNegative() ? CREDIT_ZERO : total).toString();
+    };
+
     return res.status(200).json(
       players.map((p) => {
-        let credit = null;
-        if (p.role === "customer") {
-          let total = CREDIT_ZERO;
-          for (const c of p.collection) {
-            total = total.add(creditByCollection.get(c.id) ?? CREDIT_ZERO);
-          }
-          credit = (total.isNegative() ? CREDIT_ZERO : total).toString();
-        }
+        const isCustomer = p.role === "customer";
         return {
           id: p.id,
           name: p.name,
           email: p.email,
           phone: p.phone,
           role: p.role,
-          credit,
+          saleMoney: isCustomer ? clampSum(saleMoneyByCollection, p.collection) : null,
+          storeCredit: isCustomer ? clampSum(storeCreditByCollection, p.collection) : null,
         };
       })
     );

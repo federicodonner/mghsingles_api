@@ -69,6 +69,38 @@ export async function creditFor(db, collectionid) {
   return total.isNegative() ? ZERO : total;
 }
 
+// The balance split into its two halves, which behave differently at the till:
+//   saleMoney   — earned from selling the customer's cards ("dinero en la
+//                 tienda"). Payable in cash (the Pagar page) OR spendable on a
+//                 purchase.
+//   storeCredit — loaded by hand by the shop, e.g. a tournament prize ("store
+//                 credit"). Spendable on a purchase only; never paid out.
+// Both clamped at zero. Kept apart everywhere the balance is shown.
+export async function creditBalances(db, collectionid) {
+  const [sales, adjustments] = await Promise.all([
+    db.sale.findMany({
+      where: { collectionid },
+      select: {
+        price: true,
+        baseprice: true,
+        percent: true,
+        quantity: true,
+        paidamount: true,
+      },
+    }),
+    db.creditadjustment.aggregate({
+      where: { collectionid },
+      _sum: { amount: true },
+    }),
+  ]);
+  const saleMoney = sales.reduce((sum, s) => sum.add(saleRemaining(s)), ZERO);
+  const storeCredit = new Decimal(adjustments._sum.amount ?? 0);
+  return {
+    saleMoney: saleMoney.isNegative() ? ZERO : saleMoney,
+    storeCredit: storeCredit.isNegative() ? ZERO : storeCredit,
+  };
+}
+
 // Spend up to `amount` of a collection's credit, oldest debts first.
 //
 // Whole sales are settled front to back and the boundary sale is settled
@@ -80,45 +112,48 @@ export async function consumeCredit(tx, collectionid, amount, date) {
   let left = round2(amount);
   let consumed = ZERO;
 
-  const sales = await tx.sale.findMany({
+  // STORE CREDIT FIRST. It can only ever be spent on a purchase — it is never
+  // paid out in cash — so drawing it down before the sale money preserves the
+  // most of what the customer could still take home as cash. The draw is a
+  // NEGATIVE adjustment, so the derived store credit drops by exactly what was
+  // spent, the same way filling a sale's paidamount drops its remainder.
+  const agg = await tx.creditadjustment.aggregate({
     where: { collectionid },
-    orderBy: [{ date: "asc" }, { id: "asc" }],
+    _sum: { amount: true },
   });
-
-  for (const sale of sales) {
-    if (left.lte(ZERO)) break;
-    const remaining = saleRemaining(sale);
-    if (remaining.lte(ZERO)) continue;
-
-    const take = remaining.lte(left) ? remaining : left;
-    const nextPaid = new Decimal(sale.paidamount ?? 0).add(take);
-    await tx.sale.update({
-      where: { id: sale.id },
-      data: {
-        paidamount: nextPaid,
-        // Full settlement stamps the date; a partial fill leaves it null so
-        // "when was I paid for this card" never points at a half-payment.
-        paiddate: nextPaid.gte(saleNet(sale)) ? date : null,
-      },
+  const adjBalance = new Decimal(agg._sum.amount ?? 0);
+  if (adjBalance.gt(ZERO) && left.gt(ZERO)) {
+    const take = left.lte(adjBalance) ? left : adjBalance;
+    await tx.creditadjustment.create({
+      data: { collectionid, amount: take.neg(), date, note: ADJ_SPENT_NOTE },
     });
     left = left.sub(take);
     consumed = consumed.add(take);
   }
 
-  // Sales exhausted but still credit to spend? It comes from the manual
-  // adjustment balance. Record the draw as a NEGATIVE adjustment so the
-  // derived credit drops by exactly what was spent, the same way filling a
-  // sale's paidamount drops its remainder.
+  // THEN the sale money, oldest sales settled front to back and the boundary
+  // sale partially, so "sell one expensive card, buy several cheap ones over a
+  // month" works without ever splitting a sale row.
   if (left.gt(ZERO)) {
-    const agg = await tx.creditadjustment.aggregate({
+    const sales = await tx.sale.findMany({
       where: { collectionid },
-      _sum: { amount: true },
+      orderBy: [{ date: "asc" }, { id: "asc" }],
     });
-    const adjBalance = new Decimal(agg._sum.amount ?? 0);
-    if (adjBalance.gt(ZERO)) {
-      const take = left.lte(adjBalance) ? left : adjBalance;
-      await tx.creditadjustment.create({
-        data: { collectionid, amount: take.neg(), date, note: ADJ_SPENT_NOTE },
+    for (const sale of sales) {
+      if (left.lte(ZERO)) break;
+      const remaining = saleRemaining(sale);
+      if (remaining.lte(ZERO)) continue;
+
+      const take = remaining.lte(left) ? remaining : left;
+      const nextPaid = new Decimal(sale.paidamount ?? 0).add(take);
+      await tx.sale.update({
+        where: { id: sale.id },
+        data: {
+          paidamount: nextPaid,
+          // Full settlement stamps the date; a partial fill leaves it null so
+          // "when was I paid for this card" never points at a half-payment.
+          paiddate: nextPaid.gte(saleNet(sale)) ? date : null,
+        },
       });
       left = left.sub(take);
       consumed = consumed.add(take);

@@ -6,7 +6,7 @@ import { hash as _hash, compare } from "bcrypt";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { generateToken } from "../utils/utils.js";
-import { creditFor, ZERO as CREDIT_ZERO } from "../services/credit.js";
+import { creditBalances, ZERO as CREDIT_ZERO } from "../services/credit.js";
 import { buildPlayerHistory } from "../services/playerHistory.js";
 
 // Password policy, shared by register and change-password. bcrypt only reads
@@ -237,19 +237,27 @@ router.get("/me", asyncHandler(async (req, res) => {
     return res.status(401).json({ message: messages.UNAUTHORIZED });
   }
 
-  // Their spendable store credit (dollars) — the sum of what the store owes
-  // them across their collections, minus what they have already drawn. The
-  // account screen shows it in pesos.
-  let credit = CREDIT_ZERO;
+  // Their balance, split (dollars): sale money earned from their sold cards
+  // ("dinero en la tienda", payable in cash or spendable) and store credit
+  // loaded by the shop ("store credit", spendable only). Summed across their
+  // collections; the account screen shows both in pesos.
+  let saleMoney = CREDIT_ZERO;
+  let storeCredit = CREDIT_ZERO;
   for (const c of player.collection) {
-    credit = credit.add(await creditFor(prisma, c.id));
+    const b = await creditBalances(prisma, c.id);
+    saleMoney = saleMoney.add(b.saleMoney);
+    storeCredit = storeCredit.add(b.storeCredit);
   }
 
   // If there is a user, return it
   delete player.passwordhash;
   delete player.id;
   delete player.collection;
-  return res.status(200).json({ ...player, credit: credit.toFixed(2) });
+  return res.status(200).json({
+    ...player,
+    saleMoney: saleMoney.toFixed(2),
+    storeCredit: storeCredit.toFixed(2),
+  });
 }));
 
 // The signed-in customer's own activity, same shape and ordering as the admin's
