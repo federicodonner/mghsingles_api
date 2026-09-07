@@ -44,6 +44,7 @@ import {
   addPrintingCopy,
   changePrintingCopy,
   reassignStorageCollection,
+  deleteContainerWithCards,
 } from "../services/copies.js";
 import { requirePlayerId } from "../middleware/asyncHandler.js";
 import { storeName } from "../services/locations.js";
@@ -307,8 +308,9 @@ router.put(
   })
 );
 
-// Delete a unit. Refuses while it still holds cards, so nothing loses its
-// location by accident — empty it first.
+// Delete a unit. Empty by default; a non-empty one is refused unless the caller
+// says `withCards: true` (sent by the UI after a second confirmation), in which
+// case the cards inside go with it. Nothing loses its cards by accident.
 router.delete(
   "/:storageId",
   [check("storageId").isNumeric()],
@@ -334,15 +336,24 @@ router.delete(
     if (unit.playerid !== null) {
       return res.status(400).json({ message: messages.STORAGE_CUSTOMER_OWNED });
     }
-    if (unit._count.cardplacement > 0) {
-      return res.status(400).json({
-        message: messages.STORAGE_NOT_EMPTY,
-        cardcount: unit._count.cardplacement,
-      });
+    try {
+      if (unit._count.cardplacement > 0) {
+        if (req.body?.withCards !== true) {
+          return res.status(400).json({
+            message: messages.STORAGE_NOT_EMPTY,
+            cardcount: unit._count.cardplacement,
+          });
+        }
+        const result = await deleteContainerWithCards(prisma, id);
+        return res
+          .status(200)
+          .json({ message: messages.STORAGE_DELETED, ...result });
+      }
+      await prisma.storage.delete({ where: { id } });
+      return res.status(200).json({ message: messages.STORAGE_DELETED });
+    } catch (err) {
+      return handle(err, res);
     }
-
-    await prisma.storage.delete({ where: { id } });
-    return res.status(200).json({ message: messages.STORAGE_DELETED });
   })
 );
 

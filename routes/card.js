@@ -8,7 +8,11 @@ import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
 import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import { applyFixedPrice, applyReferencePrices } from "../services/pricing.js";
+import {
+  applyFixedPrice,
+  applyReferencePrices,
+  quotePrintings,
+} from "../services/pricing.js";
 import { defaultIdentity } from "../services/identity.js";
 import {
   PAPER_ONLY,
@@ -200,6 +204,18 @@ async function getSingleCardPrice(card) {
 
 // --------------------------------
 // --------------------------------
+// Attach each printing's would-be shop price, so the picker can show what a
+// copy will cost when added — the same full selling rules (pins, NM reference,
+// the $1 floor) a real stock row carries. `price` is null for a printing the
+// shop has no reference for yet.
+async function withQuotes(prisma, printings) {
+  const quotes = await quotePrintings(prisma, printings);
+  return printings.map((printing) => ({
+    ...printing,
+    price: quotes.get(printing.scryfallid) ?? null,
+  }));
+}
+
 // Returns the versions of a specific card name.
 //
 // With `limit` in the query the answer is one page — `{ cards, total, offset }`
@@ -257,7 +273,7 @@ router.get(
         }),
         prisma.cardgeneral.count({ where }),
       ]);
-      return res.status(200).json({ cards, total, offset });
+      return res.status(200).json({ cards: await withQuotes(prisma, cards), total, offset });
     }
 
     // Finds the card in the database
@@ -271,7 +287,7 @@ router.get(
       return res.status(400).json({ message: messages.TOO_MANY_CARDS });
     }
 
-    return res.status(200).json({ cards });
+    return res.status(200).json({ cards: await withQuotes(prisma, cards) });
   })
 );
 

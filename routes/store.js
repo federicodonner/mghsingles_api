@@ -55,9 +55,10 @@ function flattenCard(card, reserved, offSale, viewerId) {
     // /card/modifiers already serves.
     conditionid: card.conditionid,
     languageid: card.languageid,
-    // A customer never sees the price of their own card; the UI shows "es tuya"
-    // instead. Nulling it here means it cannot leak even if the UI slips.
-    price: mine ? null : card.price,
+    // The owner sees the price of their own card too, alongside the "es tuya"
+    // flag — the price is public (every other shopper sees it), so there is
+    // nothing to hide from the one person who consigned it.
+    price: card.price,
     mine,
     quantity: card.quantity,
     reserved: reserved.get(card.id) ?? 0,
@@ -232,12 +233,16 @@ router.get(
     const { reserved, offSale } = await availabilityFor(prisma, matches);
     const sellable = matches
       .map((card) => flattenCard(card, reserved, offSale, req.playerId))
-      // A card with no price is not on sale yet — the shop still has to price
-      // it — so it is not offered to shoppers. The viewer's OWN cards are the
-      // exception: they show regardless (as "es tuya"), since the point there
-      // is to request them back, not to buy.
+      // The storefront only shows what is actually for sale in the shop, so a
+      // card needs a copy available (not held by an order, not filed in a
+      // container that is off sale) to appear at all — that applies to the
+      // viewer's OWN cards too. A copy the customer took home in one of their
+      // own containers is off sale, so it must not turn up here. A card with no
+      // price is not on sale yet either (the shop still has to price it); the
+      // one exception is the viewer's own card that IS for sale, shown as "es
+      // tuya" without a price so they can ask for it back.
       .filter(
-        (card) => card.mine || (card.price != null && card.available > 0)
+        (card) => card.available > 0 && (card.mine || card.price != null)
       )
       .sort(
         (a, b) =>
@@ -344,14 +349,14 @@ router.get(
         const mine =
           req.playerId != null && card.collection?.playerid === req.playerId;
         const sellable = card.approved && card.collection?.active;
-        // Own cards: no price (shown as "es tuya"), always offered back.
-        // Others: a card with no price is not on sale, so it reads as
-        // unavailable — the shop still has to price it.
+        // Own cards show their price too (alongside "es tuya") and are always
+        // offered back. Others: a card with no price is not on sale, so it
+        // reads as unavailable — the shop still has to price it.
         return [
           card.id,
           {
             mine,
-            price: mine ? null : card.price,
+            price: card.price,
             available: mine
               ? 1
               : sellable && card.price != null

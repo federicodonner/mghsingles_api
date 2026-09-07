@@ -39,6 +39,7 @@ import {
   discardStandby,
   addPrintingCopy,
   changePrintingCopy,
+  deleteContainerWithCards,
 } from "../services/copies.js";
 import { raisePinnedMatch } from "../services/matches.js";
 
@@ -284,7 +285,12 @@ router.put(
   })
 );
 
-// Delete an empty container the customer has in hand.
+// Delete a container the customer has in hand.
+//
+// Empty by default; deleting one that still holds cards takes the cards with it,
+// but only when the caller says so explicitly (`withCards: true`), which the UI
+// sends after a second confirmation. Without it a non-empty container is still
+// refused, so nothing loses its cards by accident.
 router.delete(
   "/:storageId",
   [check("storageId").isNumeric()],
@@ -306,9 +312,15 @@ router.delete(
         where: { storageid: unit.id },
       });
       if (count > 0) {
+        if (req.body?.withCards !== true) {
+          return res
+            .status(400)
+            .json({ message: messages.STORAGE_NOT_EMPTY, cardcount: count });
+        }
+        const result = await deleteContainerWithCards(req.prisma, unit.id);
         return res
-          .status(400)
-          .json({ message: messages.STORAGE_NOT_EMPTY, cardcount: count });
+          .status(200)
+          .json({ message: messages.STORAGE_DELETED, ...result });
       }
       await req.prisma.storage.delete({ where: { id: unit.id } });
       return res.status(200).json({ message: messages.STORAGE_DELETED });

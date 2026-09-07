@@ -43,9 +43,16 @@ router.post(
     var name = req.body.name;
     var email = req.body.email.toLowerCase();
     var password = req.body.password;
+    // Phone is a compulsory field at registration now (people are consignors
+    // the shop needs to reach); free-form, since people write it however they
+    // like. Trimmed so a string of spaces does not pass the check below.
+    var phone =
+      req.body.phone === undefined || req.body.phone === null
+        ? ""
+        : String(req.body.phone).trim();
 
     // Validates that all the compulsory fields are present
-    if (!name || !email || !password) {
+    if (!name || !email || !password || !phone) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
@@ -73,7 +80,7 @@ router.post(
       const passwordhash = await _hash(password, BCRYPT_COST);
       // Adds the user to the database (no username).
       const newPlayer = await prisma.player.create({
-        data: { name, email, passwordhash },
+        data: { name, email, phone, passwordhash },
       });
 
       // After the user is inserted, create a collection and add it to it

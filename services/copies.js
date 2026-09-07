@@ -78,6 +78,55 @@ export async function removeCopy(prisma, placement) {
   });
 }
 
+// Delete a whole container AND the copies inside it.
+//
+// The ordinary delete refuses a non-empty container; this is the "yes, take the
+// cards with it" path, reached only after the customer/shop confirms twice. Each
+// card that had copies here has its quantity brought back in line with the
+// copies that survive elsewhere, and a card left with no copies at all is
+// deleted — the same invariant `removeCopy` keeps, applied in bulk.
+//
+// Refuses if any copy is bagged for an order: those are mid-transaction, and
+// deleting them would strand a buyer whose card would vanish from under them.
+export async function deleteContainerWithCards(prisma, unitId) {
+  return prisma.$transaction(async (tx) => {
+    const placements = await tx.cardplacement.findMany({
+      where: { storageid: unitId },
+      select: { cardid: true, orderlineid: true },
+    });
+    if (placements.some((p) => p.orderlineid !== null)) {
+      throw new ContentsError(messages.STORAGE_HAS_BAGGED, 400);
+    }
+    const cardIds = [...new Set(placements.map((p) => p.cardid))];
+
+    // Deleting the container cascades its placements away (schema onDelete:
+    // Cascade on cardplacement.storage), so remove it first, then reconcile
+    // each card that had copies in it.
+    await tx.storage.delete({ where: { id: unitId } });
+
+    let deletedCards = 0;
+    for (const cardid of cardIds) {
+      const card = await tx.card.findUnique({
+        where: { id: cardid },
+        include: { _count: { select: { cardplacement: true } } },
+      });
+      if (!card) continue;
+      // The last copy of a card takes the card row with it — a zero-quantity
+      // card is one the owner has none of.
+      if (card._count.cardplacement === 0) {
+        await tx.card.delete({ where: { id: card.id } });
+        deletedCards += 1;
+      } else {
+        await tx.card.update({
+          where: { id: card.id },
+          data: { quantity: card._count.cardplacement },
+        });
+      }
+    }
+    return { deletedCopies: placements.length, deletedCards };
+  });
+}
+
 // Add one more copy of the same card, in the stand-by area.
 //
 // For someone who owns three of a card and is filing them into different
