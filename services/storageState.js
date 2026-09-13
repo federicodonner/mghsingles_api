@@ -19,7 +19,13 @@
 // Each step has one actor. The customer says what they want; the shop confirms
 // what physically happened. Letting either do both would mean the record
 // claiming a binder had changed hands when it was still on the shelf.
-export const STATES = ["for_sale", "retired", "released", "returning"];
+export const STATES = [
+  "for_sale",
+  "retired",
+  "released",
+  "returning",
+  "off_sale",
+];
 
 // Only cards in a for_sale container are sellable. Everything else is either
 // spoken for, in transit, or in somebody's living room.
@@ -42,10 +48,20 @@ const SHOP_MOVES = [
   ["returning", "for_sale"], // took delivery; cards go back on sale
 ];
 
+// The shop's OWN containers have no owner to hand to, so they never enter the
+// customer lifecycle above. Their one move is on and off the shelf: taken off
+// sale into `off_sale`, and put straight back. Reversible, both directions.
+const SHOP_OWNED_MOVES = [
+  ["for_sale", "off_sale"], // take the shop's own container off sale
+  ["off_sale", "for_sale"], // put it back on sale
+];
+
 export const customerCanMove = (from, to) =>
   CUSTOMER_MOVES.some(([f, t]) => f === from && t === to);
 export const shopCanMove = (from, to) =>
   SHOP_MOVES.some(([f, t]) => f === from && t === to);
+export const shopOwnedCanMove = (from, to) =>
+  SHOP_OWNED_MOVES.some(([f, t]) => f === from && t === to);
 
 // A customer may rearrange a container only while it is in their hands.
 export const customerCanEdit = (state) => state === "released";

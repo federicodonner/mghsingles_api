@@ -31,7 +31,7 @@ import {
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { defaultIdentity } from "../services/identity.js";
-import { importManaBox } from "../services/manabox.js";
+import { importCards } from "../services/collectionImport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
   removeCopy,
@@ -533,10 +533,10 @@ router.delete(
 // Add one copy of a printing to this container.
 //
 // Creating the card and placing a copy are one action here, not two calls, so
-// Import a ManaBox scan into this container. Body: { csv } — the app's CSV
-// export, verbatim. Editable containers only, same as /add; the per-row
-// semantics (binder pockets, empty lines, condition/language kept
-// faithfully) live in services/manabox.js.
+// Import a collection export into this container. Body: { csv } — a ManaBox or
+// Delver CSV export, verbatim; the format is auto-detected. Editable containers
+// only, same as /add; the per-row semantics (binder pockets, empty lines,
+// condition/language kept faithfully) live in services/collectionImport.js.
 router.post(
   "/:storageId/import",
   [check("storageId").isNumeric()],
@@ -564,17 +564,17 @@ router.post(
         return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
       }
 
-      const result = await importManaBox(
+      const result = await importCards(
         prisma,
         unit,
         collection.id,
         req.body.csv
       );
       if (result.badFile) {
-        return res.status(400).json({ message: messages.MANABOX_BAD_FILE });
+        return res.status(400).json({ message: messages.IMPORT_BAD_FILE });
       }
       if (result.tooLarge) {
-        return res.status(400).json({ message: messages.MANABOX_TOO_LARGE });
+        return res.status(400).json({ message: messages.IMPORT_TOO_LARGE });
       }
       return res.status(200).json(result);
     } catch (err) {

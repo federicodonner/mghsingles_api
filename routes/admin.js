@@ -1272,16 +1272,19 @@ router.get(
         // someone else's bag is flagged rather than hidden, so the shop is not
         // sent looking for it in a pocket it has left.
         //
-        // A withdrawal is the customer taking THEIR card home, and it comes
-        // out of THEIR binder or box — never out of the shop's display, where
-        // an identical copy may be sitting for sale. So only the wisher's own
-        // containers are offered.
+        // A withdrawal is the customer taking THEIR card home. It comes out of
+        // one of THEIR OWN containers that the shop is physically holding — a
+        // for_sale one — never the shop's display of someone else's identical
+        // copy, and never a container the customer already took home (released)
+        // or has not brought in yet (returning). A purchase, by contrast, is
+        // offered every location the card can be pulled from.
         locations: sortLocations(
           (match.card?.cardplacement ?? [])
             .filter(
               (pl) =>
                 match.kind !== "withdrawal" ||
-                pl.storage?.playerid === match.playerid
+                (pl.storage?.playerid === match.playerid &&
+                  pl.storage?.state === "for_sale")
             )
             .map(describeLocation)
         ),

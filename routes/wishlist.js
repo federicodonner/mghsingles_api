@@ -42,7 +42,7 @@ const readStrings = (v) => readList(v, (x) => String(x).trim());
 import { DEFAULT_FINISH } from "../services/finishes.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
-import { raisePinnedMatch } from "../services/matches.js";
+import { raisePinnedMatch, setAsideMatch, MatchError } from "../services/matches.js";
 
 // Does this card satisfy the entry? Each category is checked independently and
 // an empty list is a wildcard.
@@ -459,7 +459,26 @@ router.post(
     // existed but nobody was told to walk to the shelf, and when the card had
     // several copies the system picked one arbitrarily. Asking again bumps
     // the wanted quantity: a second buy means a second copy.
-    await raisePinnedMatch(prisma, playerId, card, { bumpWanted: true });
+    const match = await raisePinnedMatch(prisma, playerId, card, {
+      bumpWanted: true,
+    });
+
+    // A withdrawal is the customer reclaiming their OWN card, and there is
+    // nothing for the shop to confirm — so bag it straight away (unpulled).
+    // That gives the customer an order to track (it shows in Pedidos as "being
+    // prepared") and puts the copy on the shop's pull queue so someone fetches
+    // it from their container. A purchase is left as a raised match instead,
+    // to be confirmed with the customer on the match queue first.
+    if (own) {
+      try {
+        await setAsideMatch(prisma, match.id, null, { pulled: false });
+      } catch (err) {
+        if (err instanceof MatchError) {
+          return res.status(err.status).json({ message: err.message });
+        }
+        throw err;
+      }
+    }
 
     return res.status(201).json({
       message: own

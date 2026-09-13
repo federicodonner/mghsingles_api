@@ -16,6 +16,7 @@ import asyncHandler from "../middleware/asyncHandler.js";
 import {
   STATES,
   shopCanMove,
+  shopOwnedCanMove,
   shopHolds,
   committedPlacements,
 } from "../services/storageState.js";
@@ -35,7 +36,7 @@ import {
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { defaultIdentity } from "../services/identity.js";
-import { importManaBox } from "../services/manabox.js";
+import { importCards } from "../services/collectionImport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
   removeCopy,
@@ -56,6 +57,7 @@ const STATE_MESSAGE = {
   retired: messages.STORAGE_RETIRED,
   released: messages.STORAGE_RELEASED,
   returning: messages.STORAGE_RETURNING,
+  off_sale: messages.STORAGE_OFF_SALE,
 };
 
 // --------------------------------------------------------------------------
@@ -135,9 +137,9 @@ router.get(
         cardcount: u._count.cardplacement,
         // What the shop may do with it next, so the UI does not reimplement the
         // state machine to decide which buttons to draw. A shop-owned container
-        // has nobody to hand it to, so it never moves.
+        // has nobody to hand it to; its only move is on and off the shelf.
         cando: u.playerid === null
-          ? []
+          ? STATES.filter((to) => shopOwnedCanMove(u.state, to))
           : STATES.filter((to) => shopCanMove(u.state, to)),
         // Whether the shop physically holds it, and so may rename or
         // rearrange it at all.
@@ -391,12 +393,14 @@ router.post(
     if (!unit) {
       return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
     }
-    // The shop's own containers have no owner to hand them to, so they never
-    // leave for_sale.
-    if (unit.playerid === null) {
-      return res.status(400).json({ message: messages.STORAGE_SHOP_OWNED });
-    }
-    if (!shopCanMove(unit.state, target)) {
+    // A shop-owned container has no owner to hand it to; its only moves are on
+    // and off the shelf (for_sale <-> off_sale). A customer's container follows
+    // the full lifecycle instead.
+    const canMove =
+      unit.playerid === null
+        ? shopOwnedCanMove(unit.state, target)
+        : shopCanMove(unit.state, target);
+    if (!canMove) {
       return res.status(400).json({
         message: messages.STORAGE_BAD_STATE,
         state: unit.state,
@@ -842,10 +846,11 @@ router.post(
   })
 );
 
-// Import a ManaBox scan into this container. Body: { csv } — the app's CSV
-// export, verbatim. Same possession and ownership rules as /add below; the
-// per-row semantics (binder pockets, empty lines, condition/language kept
-// faithfully) live in services/manabox.js.
+// Import a collection export into this container. Body: { csv } — a ManaBox or
+// Delver CSV export, verbatim; the format is auto-detected. Same possession and
+// ownership rules as /add below; the per-row semantics (binder pockets, empty
+// lines, condition/language kept faithfully) live in
+// services/collectionImport.js.
 router.post(
   "/:storageId/import",
   [check("storageId").isNumeric()],
@@ -886,17 +891,17 @@ router.post(
         return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
       }
 
-      const result = await importManaBox(
+      const result = await importCards(
         prisma,
         unit,
         collection.id,
         req.body.csv
       );
       if (result.badFile) {
-        return res.status(400).json({ message: messages.MANABOX_BAD_FILE });
+        return res.status(400).json({ message: messages.IMPORT_BAD_FILE });
       }
       if (result.tooLarge) {
-        return res.status(400).json({ message: messages.MANABOX_TOO_LARGE });
+        return res.status(400).json({ message: messages.IMPORT_TOO_LARGE });
       }
       return res.status(200).json(result);
     } catch (err) {

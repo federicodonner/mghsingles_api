@@ -667,4 +667,9 @@ enum storagestate {
   retired
   released
   returning
+  /// A shop-OWNED container the shop took off sale. Its cards stop selling at
+  /// once (everything but for_sale is off sale), and it flips straight back to
+  /// for_sale. Never used for a customer's container — those have their own
+  /// off-sale states (retired/released).
+  off_sale
 }

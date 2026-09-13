@@ -213,11 +213,18 @@ export async function setAsideMatch(prisma, matchId, placementid, { pulled = fal
           where: {
             cardid: match.cardid,
             orderlineid: null,
-            // A withdrawal comes out of the customer's OWN container, never
-            // the shop's display — an identical copy there is for sale, not
-            // theirs to take home.
+            // A withdrawal comes out of the customer's OWN container that the
+            // shop is physically holding — a for_sale one. Never a released or
+            // returning container (the customer already has that, or it has not
+            // arrived), and this is also the exact copy the availability check
+            // above counted as free.
             ...(match.kind === "withdrawal"
-              ? { storage: { playerid: match.playerid } }
+              ? {
+                  storage: {
+                    playerid: match.playerid,
+                    state: "for_sale",
+                  },
+                }
               : {}),
           },
           orderBy: [
@@ -257,12 +264,14 @@ export async function setAsideMatch(prisma, matchId, placementid, { pulled = fal
       await tx.wishlist.delete({ where: { id: match.wishlistid } });
     }
 
-    // Tell the customer, once the wish is complete. Fired here rather than
-    // when the match was found: until the card is actually pulled it could
-    // still be sold at the counter, and promising it first would be a lie
-    // some of the time. Held back until the last copy so somebody wanting
-    // three is not told "ready" three times.
-    if (answered) await tx.notification.create({
+    // Tell the customer, once the wish is complete AND the copy is actually in
+    // hand. Fired here rather than when the match was found: until the card is
+    // pulled it could still be sold at the counter, and promising it first
+    // would be a lie some of the time. Held back until the last copy so
+    // somebody wanting three is not told "ready" three times. When the copy is
+    // only reserved (pulled:false), the shop's pull queue announces it when it
+    // is finally fetched, so nothing is said here yet.
+    if (answered && pulled) await tx.notification.create({
       data: {
         playerid: match.playerid,
         kind:

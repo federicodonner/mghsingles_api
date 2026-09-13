@@ -76,6 +76,8 @@ const messages = {
   STORAGE_RELEASED: "El contenedor fue entregado a su dueño.",
   STORAGE_RETURNING: "Avisaste que traés el contenedor a la tienda.",
   STORAGE_FOR_SALE: "El contenedor está en la tienda y sus cartas a la venta.",
+  STORAGE_OFF_SALE:
+    "El contenedor fue retirado de la venta. Sus cartas dejan de venderse.",
   CARD_NOT_YOURS: "Esa carta no es tuya.",
   CARD_DIGITAL_ONLY:
     "Esa versión sólo existe en formato digital (Arena o MTGO), no se puede vender en la tienda.",
@@ -88,6 +90,10 @@ const messages = {
   MANABOX_BAD_FILE:
     "Ese archivo no parece una exportación de ManaBox (falta la cabecera).",
   MANABOX_TOO_LARGE:
+    "El archivo tiene demasiadas filas. Dividilo en partes más chicas.",
+  IMPORT_BAD_FILE:
+    "No reconocimos ese archivo. Tiene que ser una exportación CSV de ManaBox o de Delver.",
+  IMPORT_TOO_LARGE:
     "El archivo tiene demasiadas filas. Dividilo en partes más chicas.",
   PLACEMENT_COMMITTED:
     "Esa copia está apartada para un pedido, no se puede mover hasta entregarla.",
