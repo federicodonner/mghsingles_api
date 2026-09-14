@@ -16,6 +16,8 @@ import {
   saleRemaining,
   creditBalances,
   consumeCredit,
+  saleMoneyOwed,
+  payConsignor,
   ZERO as CREDIT_ZERO,
 } from "../services/credit.js";
 import { applyReferencePrices, pinnedSell } from "../services/pricing.js";
@@ -41,107 +43,6 @@ import {
   snapshotOrderLines,
 } from "../services/orders.js";
 
-// Every consignor's money position, grouped by person — what the Pagar page
-// shows. Everyone who ever sold a card or received a payment appears, debt or
-// not: a settled account still answers "when did I pay them last". Owed cards
-// carry their remaining net so the page can offer exact amounts; a partial
-// remainder (credit consumption landed mid-sale) shows as such rather than
-// pretending the card is either state.
-router.get(
-  "/payment/owed",
-  [owner],
-  asyncHandler(async (req, res) => {
-    const prisma = req.prisma;
-
-    // Customers only. Owner and staff collections ARE the shop's stock (see
-    // assertOwnerMayHold), so their sales are the store selling its own cards
-    // — listing them here would show the store owing itself.
-    const CONSIGNORS_ONLY = { collection: { player: { role: "customer" } } };
-
-    const [sales, history] = await Promise.all([
-      prisma.sale.findMany({
-        where: CONSIGNORS_ONLY,
-        include: {
-          cardgeneral: {
-            select: { name: true, image: true, cardsetcode: true, cardsetname: true },
-          },
-          collection: {
-            select: { id: true, player: { select: { id: true, name: true } } },
-          },
-        },
-        orderBy: [{ date: "asc" }, { id: "asc" }],
-      }),
-      prisma.payment.findMany({
-        where: CONSIGNORS_ONLY,
-        include: {
-          collection: {
-            select: { id: true, player: { select: { id: true, name: true } } },
-          },
-        },
-        orderBy: [{ date: "desc" }, { id: "desc" }],
-      }),
-    ]);
-
-    const groups = new Map();
-    const groupFor = (collectionid, playerName) => {
-      if (!groups.has(collectionid)) {
-        groups.set(collectionid, {
-          collectionid,
-          name: playerName ?? null,
-          owed: CREDIT_ZERO,
-          sales: [],
-          payments: [],
-        });
-      }
-      return groups.get(collectionid);
-    };
-
-    for (const sale of sales) {
-      const group = groupFor(
-        sale.collectionid,
-        sale.collection?.player?.name
-      );
-      const remaining = saleRemaining(sale);
-      if (remaining.lte(0)) continue;
-      group.owed = group.owed.add(remaining);
-      group.sales.push({
-        id: sale.id,
-        date: sale.date,
-        name: sale.cardgeneral?.name ?? null,
-        image: sale.cardgeneral?.image ?? null,
-        cardsetname: sale.cardgeneral?.cardsetname ?? null,
-        quantity: sale.quantity,
-        total: new Prisma.Decimal(sale.price).mul(sale.quantity).toFixed(2),
-        net: saleNet(sale).toFixed(2),
-        remaining: remaining.toFixed(2),
-        // A boundary sale partially eaten by credit use.
-        partial: new Prisma.Decimal(sale.paidamount ?? 0).gt(0),
-      });
-    }
-
-    // The ledger under each group: what has already been settled, newest
-    // first. `kind` rides along because a credit row is not cash that changed
-    // hands, and a history that hid the difference would read wrong.
-    for (const payment of history) {
-      const group = groupFor(
-        payment.collectionid,
-        payment.collection?.player?.name
-      );
-      group.payments.push({
-        id: payment.id,
-        date: payment.date,
-        ammount: payment.ammount.toFixed(2),
-        kind: payment.kind,
-      });
-    }
-
-    return res.status(200).json(
-      [...groups.values()]
-        .map((group) => ({ ...group, owed: group.owed.toFixed(2) }))
-        .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""))
-    );
-  })
-);
 
 // A player's spendable balance, split: sale money ("dinero en la tienda") and
 // store credit. The order-completion sidebar asks this before offering credit
@@ -170,55 +71,6 @@ router.get(
   })
 );
 
-// Pay the consignor for specific sold cards.
-//
-// The Pagar page selects sales; each is settled in full (paidamount = net)
-// and one payout ledger row per collection records the cash that changed
-// hands. Already-settled ids are skipped rather than paid twice.
-router.post(
-  "/payment",
-  [owner],
-  asyncHandler(async (req, res) => {
-    const prisma = req.prisma;
-    const ids = Array.isArray(req.body.saleids)
-      ? req.body.saleids.map((v) => parseInt(v, 10)).filter(Number.isInteger)
-      : [];
-    if (!ids.length) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-
-    const now = nowSeconds();
-    const paid = await prisma.$transaction(async (tx) => {
-      const sales = await tx.sale.findMany({ where: { id: { in: ids } } });
-      const byCollection = new Map();
-      for (const sale of sales) {
-        const remaining = saleRemaining(sale);
-        if (remaining.lte(0)) continue;
-        await tx.sale.update({
-          where: { id: sale.id },
-          data: { paidamount: saleNet(sale), paiddate: now },
-        });
-        byCollection.set(
-          sale.collectionid,
-          (byCollection.get(sale.collectionid) ?? CREDIT_ZERO).add(remaining)
-        );
-      }
-      let total = CREDIT_ZERO;
-      for (const [collectionid, ammount] of byCollection) {
-        await tx.payment.create({
-          data: { collectionid, ammount, kind: "payout", date: now },
-        });
-        total = total.add(ammount);
-      }
-      return total;
-    });
-
-    return res.status(200).json({
-      message: messages.PAYMENT_DONE,
-      paid: paid.toFixed(2),
-    });
-  })
-);
 
 // Post a sale
 router.post(
@@ -319,6 +171,7 @@ router.get(
       select: {
         name: true,
         email: true,
+        phone: true,
         role: true,
       },
     });
@@ -2109,6 +1962,68 @@ router.post(
     });
 
     return res.status(200).json({ message: messages.CREDIT_ADJUSTED });
+  })
+);
+
+// Pay a consignor part (or all) of the SALE MONEY the store owes them — the
+// "dinero en la tienda" the Usuarios list shows. The amount comes in pesos
+// (what actually changes hands); it is converted to dollars, capped at what is
+// owed (never pay more than the debt), and settled oldest sale first. The debt
+// drops by exactly that, and a payout row lands in the history.
+router.post(
+  "/player/:playerId/pay",
+  [owner, check("playerId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const prisma = req.prisma;
+    const id = parseInt(req.params.playerId, 10);
+
+    const pesos = Number(req.body.pesos);
+    if (!Number.isFinite(pesos) || pesos <= 0) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+
+    const target = await prisma.player.findUnique({
+      where: { id },
+      select: { role: true, collection: { select: { id: true } } },
+    });
+    if (!target) {
+      return res.status(404).json({ message: messages.USER_NOT_FOUND });
+    }
+    // Only a customer is a consignor the store owes; the shop's own accounts
+    // sell the store's own stock.
+    if (target.role !== "customer" || !target.collection.length) {
+      return res.status(400).json({ message: messages.CREDIT_NOT_CUSTOMER });
+    }
+
+    // Pesos → dollars at the shop's rate; the money ledger is in dollars.
+    const rate = await exchangeRate(prisma);
+    if (!rate) {
+      return res.status(400).json({ message: messages.CREDIT_NO_RATE });
+    }
+    const collectionIds = target.collection.map((c) => c.id);
+
+    const paid = await prisma.$transaction(async (tx) => {
+      const owed = await saleMoneyOwed(tx, collectionIds);
+      if (owed.lte(0)) return null; // nothing to pay
+      let pay = new Prisma.Decimal(pesos / rate).toDecimalPlaces(2);
+      // Never more than the debt; and snap to the full balance when within a
+      // cent, so "pay everything" leaves nothing stranded by peso rounding.
+      if (pay.gt(owed) || owed.sub(pay).lt(0.01)) pay = owed;
+      return payConsignor(tx, collectionIds, pay, nowSeconds());
+    });
+
+    if (paid === null) {
+      return res.status(400).json({ message: messages.NOTHING_OWED });
+    }
+    return res.status(200).json({
+      message: messages.PAYMENT_DONE,
+      paid: paid.toFixed(2),
+      paidpesos: Math.round(Number(paid) * rate),
+    });
   })
 );
 

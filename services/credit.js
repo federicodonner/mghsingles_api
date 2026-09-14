@@ -101,6 +101,72 @@ export async function creditBalances(db, collectionid) {
   };
 }
 
+// What the store still owes a customer in SALE MONEY across all their
+// collections — the cash-payable half of the balance, the same number the
+// Usuarios list sums per customer. Clamped at zero.
+export async function saleMoneyOwed(db, collectionIds) {
+  if (!collectionIds.length) return ZERO;
+  const sales = await db.sale.findMany({
+    where: { collectionid: { in: collectionIds } },
+    select: {
+      price: true,
+      baseprice: true,
+      percent: true,
+      quantity: true,
+      paidamount: true,
+    },
+  });
+  const total = sales.reduce((sum, s) => sum.add(saleRemaining(s)), ZERO);
+  return total.isNegative() ? ZERO : total;
+}
+
+// Pay a consignor `amount` in cash, settling their unpaid SALES oldest first
+// across the given collections. A whole sale is settled front to back and the
+// boundary sale partially, exactly like consumeCredit — but this only ever
+// touches sale money (store credit is never paid out in cash) and records a
+// `payout` ledger row per collection touched, so the history reads honestly.
+// Returns the Decimal actually paid.
+export async function payConsignor(tx, collectionIds, amount, date) {
+  let left = round2(amount);
+  const paidByCollection = new Map();
+
+  const sales = await tx.sale.findMany({
+    where: { collectionid: { in: collectionIds } },
+    orderBy: [{ date: "asc" }, { id: "asc" }],
+  });
+  for (const sale of sales) {
+    if (left.lte(ZERO)) break;
+    const remaining = saleRemaining(sale);
+    if (remaining.lte(ZERO)) continue;
+
+    const take = remaining.lte(left) ? remaining : left;
+    const nextPaid = new Decimal(sale.paidamount ?? 0).add(take);
+    await tx.sale.update({
+      where: { id: sale.id },
+      data: {
+        paidamount: nextPaid,
+        // Full settlement stamps the date; a partial fill leaves it null so
+        // "when was I paid for this card" never points at a half-payment.
+        paiddate: nextPaid.gte(saleNet(sale)) ? date : null,
+      },
+    });
+    left = left.sub(take);
+    paidByCollection.set(
+      sale.collectionid,
+      (paidByCollection.get(sale.collectionid) ?? ZERO).add(take)
+    );
+  }
+
+  let total = ZERO;
+  for (const [collectionid, ammount] of paidByCollection) {
+    await tx.payment.create({
+      data: { collectionid, ammount, kind: "payout", date },
+    });
+    total = total.add(ammount);
+  }
+  return total;
+}
+
 // Spend up to `amount` of a collection's credit, oldest debts first.
 //
 // Whole sales are settled front to back and the boundary sale is settled

@@ -140,6 +140,7 @@ const messages = {
   REFILE_CLEARED: "Listo, cartas devueltas a su lugar.",
   PIN_REMOVED: "El precio vuelve a seguir al mercado.",
   PAYMENT_DONE: "Pago registrado.",
+  NOTHING_OWED: "Este cliente no tiene dinero pendiente de cobro.",
   CREDIT_NOT_YOURS: "Este pedido no tiene un cliente al que aplicarle crédito.",
   MATCH_DISMISSED: "La coincidencia fue descartada.",
   NOTIFICATION_NOT_FOUND: "Ese aviso no existe.",
