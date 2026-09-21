@@ -127,11 +127,13 @@ export async function deleteContainerWithCards(prisma, unitId) {
   });
 }
 
-// Add one more copy of the same card, in the stand-by area.
+// Add one more copy of the same card, next to the one duplicated.
 //
 // For someone who owns three of a card and is filing them into different
 // pockets: they add it once and duplicate it, rather than searching for the
-// same printing three times.
+// same printing three times. The copy lands where the original sits: bottom
+// of the same pocket in a binder (stand-by stays stand-by), right after it
+// in a sorted box, and simply in the container for an unsorted box.
 export async function duplicateCopy(prisma, placement) {
   return prisma.$transaction(async (tx) => {
     const card = await tx.card.findUnique({
@@ -147,14 +149,47 @@ export async function duplicateCopy(prisma, placement) {
       _max: { copyindex: true },
     });
 
+    let position = { ...STANDBY_WHERE, depth: null, sequence: null };
+    if (placement.storage?.type === "binder" && placement.pocket !== null) {
+      const deepest = await tx.cardplacement.aggregate({
+        where: {
+          storageid: placement.storageid,
+          page: placement.page,
+          pocket: placement.pocket,
+        },
+        _max: { depth: true },
+      });
+      position = {
+        page: placement.page,
+        pocket: placement.pocket,
+        depth: (deepest._max.depth ?? 0) + 1,
+        sequence: null,
+      };
+    } else if (
+      placement.storage?.type === "sorted_box" &&
+      placement.sequence !== null
+    ) {
+      await tx.cardplacement.updateMany({
+        where: {
+          storageid: placement.storageid,
+          sequence: { gt: placement.sequence },
+        },
+        data: { sequence: { increment: 1 } },
+      });
+      position = {
+        page: null,
+        pocket: null,
+        depth: null,
+        sequence: placement.sequence + 1,
+      };
+    }
+
     const created = await tx.cardplacement.create({
       data: {
         cardid: card.id,
         copyindex: (highest._max.copyindex ?? 0) + 1,
         storageid: placement.storageid,
-        ...STANDBY_WHERE,
-        depth: null,
-        sequence: null,
+        ...position,
       },
     });
 
