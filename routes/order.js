@@ -265,4 +265,86 @@ router.delete(
   })
 );
 
+// Trim ONE copy off one of the customer's own pending orders — removing a
+// single card they changed their mind about, instead of cancelling the whole
+// reservation. Removing the last copy cancels the order, same as the shop's
+// per-line removal.
+router.delete(
+  "/:orderId/line/:lineId",
+  [check("orderId").isNumeric(), check("lineId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+    const orderId = parseInt(req.params.orderId, 10);
+    const lineId = parseInt(req.params.lineId, 10);
+
+    // Scoped to the owner, so one customer cannot trim another's order.
+    const order = await prisma.order.findFirst({
+      where: { id: orderId, playerid: playerId },
+    });
+    if (!order) {
+      return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    if (order.status !== "pending") {
+      return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
+    }
+    const line = await prisma.orderline.findFirst({
+      where: { id: lineId, orderid: orderId },
+    });
+    if (!line) {
+      return res.status(404).json({ message: messages.LINE_NOT_FOUND });
+    }
+
+    const cancelled = await prisma.$transaction(async (tx) => {
+      // Release ONE copy. Prefer one nobody pulled yet — it never left its
+      // pocket, so unlinking it is the whole job; a pulled copy is in a bag
+      // on the counter and lands on the shop's refile panel.
+      const placement = await tx.cardplacement.findFirst({
+        where: { orderlineid: line.id },
+        orderBy: { pulled: "asc" },
+      });
+      if (placement) {
+        await tx.cardplacement.update({
+          where: { id: placement.id },
+          data: {
+            orderlineid: null,
+            pulled: false,
+            ...(placement.pulled ? { needsrefile: true } : {}),
+          },
+        });
+      }
+
+      if (line.quantity > 1) {
+        await tx.orderline.update({
+          where: { id: line.id },
+          data: { quantity: line.quantity - 1 },
+        });
+      } else {
+        await tx.orderline.delete({ where: { id: line.id } });
+      }
+
+      const remaining = await tx.orderline.count({
+        where: { orderid: orderId },
+      });
+      if (remaining === 0) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: "cancelled", closed: nowSeconds() },
+        });
+        return true;
+      }
+      return false;
+    });
+
+    return res.status(200).json({
+      message: cancelled ? messages.ORDER_CANCELLED : messages.LINE_REMOVED,
+      ordercancelled: cancelled,
+    });
+  })
+);
+
 export default router;

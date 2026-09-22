@@ -108,6 +108,7 @@ const messages = {
     "No hay stock suficiente de una de las cartas para reservarla.",
   ORDER_CANCELLED: "El pedido fue cancelado y las cartas quedaron disponibles.",
   LINE_REMOVED: "La carta fue quitada del pedido y volvió a estar disponible.",
+  LINE_NOT_FOUND: "Esa carta no está en el pedido.",
   ORDER_COMPLETED: "El pedido fue entregado y cobrado.",
   ORDER_HANDED_OVER: "Las cartas fueron entregadas a su dueño.",
   CARD_NOT_AVAILABLE: "Esta carta no está a la venta.",
