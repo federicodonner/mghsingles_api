@@ -22,7 +22,6 @@ import { STATES, customerCanMove, customerCanEdit } from "../services/storageSta
 import {
   ContentsError,
   readContents,
-  placeCopy,
   movePlacement,
   setBinderPosition,
   reorderSorted,
@@ -152,50 +151,12 @@ router.get(
   })
 );
 
-// Copies of the customer's cards that are not in any container.
-//
-// Matters because Contenedores is now the only place a customer sees their
-// cards. A card row can have four copies and three placements — the fourth is
-// real, owned and unaccounted for, and before this it was simply invisible.
-//
-// Registered ahead of /:storageId: that route validates its parameter as
-// numeric, so "unfiled" would be rejected as a bad id rather than falling
-// through to here.
-router.get(
-  "/unfiled",
-  asyncHandler(async (req, res) => {
-    const playerId = requirePlayerId(req);
-
-    const cards = await req.prisma.card.findMany({
-      where: { collection: { playerid: playerId } },
-      include: {
-        cardgeneral: true,
-        cardcondition: { select: { name: true } },
-        cardlanguage: { select: { name: true } },
-        _count: { select: { cardplacement: true } },
-      },
-    });
-
-    const unfiled = cards
-      .map((card) => ({
-        cardid: card.id,
-        name: card.cardgeneral?.name ?? null,
-        image: card.cardgeneral?.image ?? null,
-        cardsetcode: card.cardgeneral?.cardsetcode ?? null,
-        cardsetname: card.cardgeneral?.cardsetname ?? null,
-        variant: card.variant,
-        condition: card.cardcondition?.name ?? null,
-        language: card.cardlanguage?.name ?? null,
-        // Every copy is either in a container or it is not; a copy in a pick-up
-        // bag still has its placement, so it is not counted as unfiled.
-        copies: card.quantity - card._count.cardplacement,
-      }))
-      .filter((row) => row.copies > 0)
-      .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? ""));
-
-    return res.status(200).json(unfiled);
-  })
-);
+// NOTE: GET /unfiled used to live here — it listed copies whose card row had
+// more quantity than placements. It existed to make orphans from the two-step
+// add (POST /card/:collectionId, since removed) visible. With every add now
+// going through addPrintingCopy (card + placement in one transaction) and
+// every removal keeping the invariant, nothing can create such copies, and
+// the listing offered no way to act on them anyway.
 
 // Create a container.
 //
@@ -395,46 +356,11 @@ router.post(
 // Rearranging — only while the container is in the customer's hands
 // --------------------------------------------------------------------------
 
-// Put one of the customer's own cards into one of their own containers.
-router.post(
-  "/:storageId/place",
-  [check("storageId").isNumeric(), check("cardid").isNumeric()],
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-    const playerId = requirePlayerId(req);
-
-    try {
-      const unit = await ownUnit(
-        req.prisma,
-        playerId,
-        parseInt(req.params.storageId, 10)
-      );
-      assertEditable(unit);
-
-      // placeCopy does not judge ownership, so check before it writes anything:
-      // filing somebody else's card into your own binder would be filing away
-      // stock you do not own.
-      const card = await req.prisma.card.findUnique({
-        where: { id: parseInt(req.body.cardid, 10) },
-        include: { collection: { select: { playerid: true } } },
-      });
-      if (!card) {
-        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
-      }
-      if (card.collection?.playerid !== playerId) {
-        return res.status(403).json({ message: messages.CARD_NOT_YOURS });
-      }
-
-      const { placement } = await placeCopy(req.prisma, unit, req.body);
-      return res.status(201).json(placement);
-    } catch (err) {
-      return handle(err, res);
-    }
-  })
-);
+// NOTE: POST /:storageId/place used to live here — it filed an EXISTING copy
+// that had no placement. Since every copy is now created already placed
+// (POST /:storageId/add) and every removal keeps quantity and placements in
+// step, a copy with no placement cannot exist and the route had nothing left
+// to place.
 
 // Ask for one of your own cards back, out of a container the shop is holding.
 //

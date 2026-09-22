@@ -7,18 +7,9 @@ import { check, validationResult } from "express-validator";
 import messages from "../data/messages.js";
 import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 import { authentication } from "../middleware/authentication.js";
-import { FINISHES, DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import {
-  applyFixedPrice,
-  applyReferencePrices,
-  quotePrintings,
-} from "../services/pricing.js";
-import { defaultIdentity } from "../services/identity.js";
-import {
-  PAPER_ONLY,
-  PAPER_SETS_ONLY,
-  isPaperPrinting,
-} from "../services/paper.js";
+import { FINISHES } from "../services/finishes.js";
+import { quotePrintings } from "../services/pricing.js";
+import { PAPER_ONLY, PAPER_SETS_ONLY } from "../services/paper.js";
 
 async function getExternalUrl(path) {
   const options = {
@@ -485,145 +476,14 @@ router.delete("/:cardId", [authentication, check("cardId").isNumeric()], asyncHa
   return res.status(200).json(card);
 }));
 
-// --------------------------------
-// --------------------------------
-// Add card
-router.post(
-  "/:collectionId",
-  [
-    authentication,
-    check("scryfallId").escape().exists(),
-    // An upper bound as well as a lower one: a card row's quantity later drives
-    // per-copy loops (cart confirmation, sale), so an unbounded value here is a
-    // denial-of-service lever, not just bad data. 500 is far above any real
-    // manual add (the UI offers 1-10).
-    check("quantity").isNumeric().isFloat({ min: 1, max: 500 }),
-    check("condition").optional().isNumeric(),
-    check("language").optional().isNumeric(),
-    check("variant").optional().escape(),
-    check("collectionId").isNumeric(),
-  ],
-  asyncHandler(async (req, res) => {
-    // Validates that the parameters are correct
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      // If one of them isn't, returns an error
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-    // Gets the playerId from the authentication middleware
-    const playerId = requirePlayerId(req);
-    // Gets the card collection from the request
-    const collectionid = parseInt(req.params.collectionId);
-
-    // Loads the data into variables to use
-    const scryfallid = req.body.scryfallId;
-    // Round the quantity in case the use sends a fraction
-    const quantity = Math.floor(req.body.quantity);
-    // The UI no longer asks for condition or language — a manual add is
-    // assumed NM English. Explicit values (a future ManaBox import) still
-    // land as sent; the columns keep being tracked either way.
-    const assumed = await defaultIdentity(req.prisma);
-    const conditionid = parseInt(req.body.condition) || assumed.conditionid;
-    const languageid = parseInt(req.body.language) || assumed.languageid;
-    // `variant` is a finish name, not a number — parseInt on it yielded NaN and
-    // Prisma rejected the write.
-    const variant = req.body.variant
-      ? String(req.body.variant).trim()
-      : DEFAULT_FINISH;
-
-    // Gets prisma from middleware
-    const prisma = req.prisma;
-
-    try {
-      // The collection must belong to the requesting player. Without this any
-      // authenticated user could add cards to anyone else's collection.
-      const collection = await prisma.collection.findFirst({
-        where: { id: collectionid, playerid: playerId },
-        select: { id: true },
-      });
-      if (!collection) {
-        return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
-      }
-
-      const cardsInCardsGeneral = await prisma.cardgeneral.findUnique({
-        where: { scryfallid },
-      });
-
-      // If there are no results, return error
-      if (!cardsInCardsGeneral) {
-        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
-      }
-
-      // A digital-only printing cannot be graded, sleeved or handed over a
-      // counter. The importer keeps these out of the catalogue entirely; this
-      // is the boundary check, so a stale row from an older dump still cannot
-      // become stock.
-      if (!isPaperPrinting(cardsInCardsGeneral)) {
-        return res.status(400).json({ message: messages.CARD_DIGITAL_ONLY });
-      }
-
-      // Half of all printings exist in only one finish, so a copy cannot claim
-      // a finish its printing was never produced in.
-      const available = finishesFor(cardsInCardsGeneral);
-      if (!available.includes(variant)) {
-        return res.status(400).json({
-          message: messages.FINISH_NOT_AVAILABLE,
-          finishes: available,
-        });
-      }
-
-      // Tries to find the card in the collection, if it's there
-      // add the quantity to the existing card
-      const existingCard = await prisma.card.findFirst({
-        where: { scryfallid, conditionid, languageid, variant, collectionid },
-      });
-
-      // If there are results, get the cardId
-      if (existingCard) {
-        await prisma.card.update({
-          where: { id: existingCard.id },
-          data: { quantity: existingCard.quantity + quantity },
-        });
-
-        return res.status(200).json({
-          message: messages.COLLECTION_UPDATED,
-          card: { id: existingCard.id, quantity: existingCard.quantity + quantity },
-        });
-      } else {
-        // Adds the card to the database
-        const newCard = await prisma.card.create({
-          data: {
-            scryfallid,
-            conditionid,
-            languageid,
-            quantity,
-            collectionid,
-            variant,
-          },
-        });
-
-        // Price the row the moment it exists, not at the next nightly run: a
-        // pinned printing gets its fixed price, everything else gets the
-        // stored CardKingdom reference — a card added today should not sit
-        // priceless on the shelf until tomorrow's import.
-        await applyFixedPrice(prisma, newCard);
-        await applyReferencePrices(prisma, { onlyCardIds: [newCard.id] });
-
-        // The id goes back so the caller can act on what it just created —
-        // filing the copy straight into a container, for instance. Returning
-        // only a message meant the customer added a card and then had to go and
-        // find it again.
-        return res.status(201).json({
-          message: messages.COLLECTION_UPDATED,
-          card: { id: newCard.id, quantity: newCard.quantity },
-        });
-      }
-    } catch (e) {
-      console.log(e);
-      return res.status(400).json({ error: e });
-    }
-  })
-);
+// NOTE: POST /:collectionId used to live here — it created a card row (or
+// grew its quantity) WITHOUT a placement, and filing the copy into a
+// container was a separate call the client had to remember to make. That
+// two-step dance was the one mechanism that could leave copies with no
+// container when the second call never came (network error, closed tab), so
+// it was removed (2026-09-22) in favour of POST /mystorage/:storageId/add and
+// POST /storage/:storageId/add, which create the card and place the copy in
+// one transaction via addPrintingCopy.
 
 // NOTE: two routes used to live here — POST /price/:cardid and
 // POST /multipleprice — that scraped CardKingdom on demand. They were removed

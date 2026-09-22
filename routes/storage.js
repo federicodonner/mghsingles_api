@@ -27,7 +27,6 @@ import {
   ContentsError,
   describeUnit,
   readContents,
-  placeCopy,
   movePlacement,
   setBinderPosition,
   reorderSorted,
@@ -514,32 +513,11 @@ function handle(err, res) {
   throw err;
 }
 
-// Place one copy of an existing card into one of the shop's units.
-// Body: { cardid, copyindex, page, pocket, sequence, standby }
-router.post(
-  "/:storageId/place",
-  [check("storageId").isNumeric(), check("cardid").isNumeric()],
-  asyncHandler(async (req, res) => {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
-    }
-    const unit = await req.prisma.storage.findUnique({
-      where: { id: parseInt(req.params.storageId, 10) },
-    });
-    if (!unit) {
-      return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
-    }
-
-    try {
-      assertShopOwned(unit);
-      const { placement } = await placeCopy(req.prisma, unit, req.body);
-      return res.status(201).json(placement);
-    } catch (err) {
-      return handle(err, res);
-    }
-  })
-);
+// NOTE: POST /:storageId/place used to live here — it filed an EXISTING copy
+// that had no placement. Since every copy is now created already placed
+// (POST /:storageId/add) and every removal keeps quantity and placements in
+// step, a copy with no placement cannot exist and the route had nothing left
+// to place.
 
 // Take a copy out of one of the shop's units.
 //

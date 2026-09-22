@@ -283,7 +283,6 @@ login: POST /oauth -> 200 token=DXgCsZTkp7yEhVP9cXEq77KDg role=owner
 200   /admin/pendingpayments   [{"name":"Martín Silva","collectionid":62,"sales":"688.86",...
 200   /storage                 [{"id":98,"name":"Caja de otro nombre","type":"sorted_box","state":"for_sale",...
 200   /mystorage               []
-200   /mystorage/unfiled       []
 200   /order                   []
 200   /wishlist                []
 200   /wishlist/covers?cardids=1,2 {}
@@ -295,7 +294,6 @@ login: POST /oauth -> 200 token=DXgCsZTkp7yEhVP9cXEq77KDg role=owner
 200   /admin/cards/search?q=a  {"numberOfCards":200,"cards":[...
 200   /notification            {"unread":0,"items":[]}
 
-201   POST /card/59           {"message":"Su colección ha sido actualizada con éxito.","card":{"id":...
 200   DELETE /card/1257       {"scryfallid":"5defb2d1-..."}
 
 0 route(s) never answered
@@ -586,7 +584,8 @@ the old "npm start has no database" trap is fixed.
   2. `services/paper.js` states the same rule for queries: `PAPER_ONLY` for
      cardgeneral, `PAPER_SETS_ONLY` for the set picker, `isPaperPrinting()` for
      a row in hand. `/card/versions`, `/card/set/:setId` and `/card/sets` all
-     filter, and `POST /card/:collectionId` returns `CARD_DIGITAL_ONLY`.
+     filter, and `POST /mystorage/:storageId/add` (and its shop twin under
+     `/storage`) returns `CARD_DIGITAL_ONLY`.
   3. The database itself: `cardgeneral.games` is stored, so the invariant is
      checkable — `SELECT count(*) FROM cardgeneral WHERE NOT ('paper' =
      ANY(games))` should always be 0.
@@ -642,15 +641,14 @@ the old "npm start has no database" trap is fixed.
   retirement request the shop then approves would be theatre. The cards come off
   sale on the way, since `retired` and `released` both mean "not for sale".
 
-- **`GET /mystorage/unfiled` exists because Contenedores is now the customer's
-  only view of their cards.** A card row can have four copies and three
-  placements; before this the fourth was real, owned and invisible. Registered
-  ahead of `/:storageId`, which validates its parameter as numeric and would
-  otherwise reject "unfiled" as a bad id.
-
-- **`POST /card/:collectionId` returns the card row, not just a message.** The
-  customer's add-card flow creates the card and then files a copy into the
-  container they were looking at, which it cannot do without the id.
+- **Every copy is born placed.** `POST /card/:collectionId`, the customer's
+  `POST /mystorage/:storageId/place` and `GET /mystorage/unfiled` were all
+  removed (2026-09-22): the first created card rows without placements, the
+  second existed to file the resulting orphans, and the third to display them.
+  Both apps now add copies through `POST /mystorage/:storageId/add` /
+  `POST /storage/:storageId/add`, which create-or-grow the card row and place
+  the copy in one transaction (`addPrintingCopy`), so `card.quantity ==
+  count(cardplacement)` holds by construction.
 
 - **A container has four states, and only `for_sale` sells.** `storage.state` is
   `for_sale` / `retired` / `released` / `returning`, replacing an `inshop`
@@ -722,8 +720,8 @@ the old "npm start has no database" trap is fixed.
 - **Finishes belong to the PRINTING, not to the shop's choice.**
   `cardgeneral.finishes` comes straight from Scryfall: `nonfoil`, `foil`,
   `etched`. Half of all printings exist in only one — 38% nonfoil-only, 12%
-  foil-only — so `POST /card` rejects a copy whose finish its printing was never
-  produced in. `services/finishes.js` holds the vocabulary; nothing should
+  foil-only — so the add routes reject a copy whose finish its printing was
+  never produced in. `services/finishes.js` holds the vocabulary; nothing should
   hard-code a finish string.
 
 - **`nonfoil` and `foil` share a printing and therefore share an image**, which
