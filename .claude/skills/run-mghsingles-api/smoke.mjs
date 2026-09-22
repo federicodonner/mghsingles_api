@@ -10,8 +10,8 @@
 // mid-run and make every later probe report a connection error instead of the
 // real problem. A route that throws without responding shows up as HANG.
 //
-// --seed-user creates the login (+ its collection and three cards) if
-// missing, so the authenticated probes have something to authenticate as.
+// Accounts come from `npm run seed:dev` (scripts/seedDev.mjs) and the user
+// manages their own test data — this script never creates users.
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
 import { dirname, resolve } from "node:path";
@@ -24,9 +24,9 @@ const APP_DIR = resolve(HERE, "../../..");
 const PORT = process.env.PORT || "3101";
 const BASE = process.env.API_URL || `http://localhost:${PORT}`;
 const LAUNCH = !process.argv.includes("--no-launch");
-const SEED_USER = process.argv.includes("--seed-user");
-// The owner account from `npm run seed:dev`. Override with DEV_USER/DEV_PASS.
-const USER = process.env.DEV_USER || "fede";
+// The owner account from `npm run seed:dev`. Override with DEV_EMAIL/DEV_PASS.
+// Login is by EMAIL — /oauth matches the identifier against player.email.
+const EMAIL = process.env.DEV_EMAIL || "fede@example.com";
 const PASS = process.env.DEV_PASS || "fede1234";
 const TIMEOUT = 8000;
 
@@ -71,28 +71,14 @@ const jfetch = (path, opts = {}) =>
     signal: AbortSignal.timeout(TIMEOUT),
   });
 
-// --- ensure a user exists -------------------------------------------------
-if (SEED_USER) {
-  const r = await jfetch("/player", {
-    method: "POST",
-    body: JSON.stringify({
-      username: USER,
-      name: "Dev User",
-      email: `${USER}@example.com`,
-      password: PASS,
-    }),
-  });
-  console.log(`seed user: POST /player -> ${r.status} ${r.status === 400 ? "(already exists)" : ""}`);
-}
-
 // --- log in ---------------------------------------------------------------
-// Only the newest token per player is accepted, so this invalidates any token
-// obtained earlier (including one a browser session is holding).
+// Sessions coexist: this token is a new login row and does NOT invalidate any
+// token a browser session is holding.
 let token = null;
 {
   const r = await jfetch("/oauth", {
     method: "POST",
-    body: JSON.stringify({ username: USER, password: PASS }),
+    body: JSON.stringify({ email: EMAIL, password: PASS }),
   });
   const body = await r.json().catch(() => ({}));
   token = body.token || null;
@@ -100,7 +86,8 @@ let token = null;
     `login: POST /oauth -> ${r.status}` +
       (token ? ` token=${token} role=${body.role}` : ` ${JSON.stringify(body)}`)
   );
-  if (!token) console.log(`  (re-run with --seed-user to create ${USER})`);
+  if (!token)
+    console.log(`  (no ${EMAIL}? accounts come from scripts/seedDev.mjs — the user manages test data, do not reseed)`);
 }
 console.log("");
 

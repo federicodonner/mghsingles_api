@@ -1,6 +1,6 @@
 -- Minimal dev seed for mghsingles_api.
 --
--- Run AFTER `npx prisma@6.14.0 db push` has created the schema.
+-- Run AFTER `./node_modules/.bin/prisma db push` has created the schema.
 -- Do NOT load mghsingles.psql: that dump predates the current schema.prisma
 -- and its only real content is the two lookup tables reproduced below.
 --

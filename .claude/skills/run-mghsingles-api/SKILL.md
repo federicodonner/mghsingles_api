@@ -10,14 +10,14 @@ Express 4 + Prisma 6 + PostgreSQL. Single entrypoint `app.js`, listens on
 
 The agent path is `.claude/skills/run-mghsingles-api/smoke.mjs`: it launches
 the server, logs in, probes every route and prints which ones answer, then
-adds and deletes a card so the write paths are exercised too. All 21 currently
+adds and deletes a card so the write paths are exercised too. All 26 currently
 return 200.
 
 All paths below are relative to `mghsingles_api/`.
 
 ## Prerequisites
 
-- Node (verified on v24.4.1, despite `engines: node 16.x` in `package.json`)
+- Node 22+ (`engines: node 22.x`; verified on v24.4.1)
 - PostgreSQL running locally (verified with Postgres.app, PG 15)
 
 `.env` is committed and points at `postgresql://fefi:root@localhost:5432/mghsingles`.
@@ -34,11 +34,11 @@ Create the database if `psql -lqt | grep mghsingles` comes back empty:
 createdb mghsingles
 ```
 
-Build the schema. **Pin the Prisma CLI to 6.x** — the project has no `prisma`
-devDependency, so a bare `npx prisma` fetches v7, which rejects this schema:
+Build the schema. The Prisma CLI is a pinned devDependency (7.x, in lockstep
+with `@prisma/client`) — run the local one:
 
 ```bash
-npx prisma@6.14.0 db push
+./node_modules/.bin/prisma db push
 ```
 
 `db push` is a dev shortcut — it diffs the schema straight onto the database
@@ -46,7 +46,8 @@ and will happily drop a column. There are no migration files in this project,
 so anything heading for the Heroku database needs a real migration written by
 hand.
 
-Seed lookup tables, card sets and card definitions:
+Seed lookup tables (conditions, languages) and a handful of card definitions —
+the real catalogue comes from `npm run sync:scryfall` afterwards:
 
 ```bash
 psql -d mghsingles -v ON_ERROR_STOP=1 -f .claude/skills/run-mghsingles-api/seed.sql
@@ -56,39 +57,24 @@ Do **not** load `mghsingles.psql`. It predates the current `schema.prisma`
 (it has `card.foil` and lacks `card.variant`/`price`/`ckuri`), and every table
 in it is empty except the two lookup tables that `seed.sql` reproduces.
 
-Create the dev user (`devuser` / `devpass123`) and make it the owner —
-`/admin/*` returns 403 for a customer account:
+## Test users and data
 
-```bash
-node .claude/skills/run-mghsingles-api/smoke.mjs --seed-user
-```
+**Do not reseed. The user manages their own test data by hand.** The accounts
+and stock come from `scripts/seedDev.mjs` (`npm run seed:dev`), which **wipes
+all transactional data** — only run it if the user explicitly asks.
 
-```bash
-psql -d mghsingles -c "UPDATE player SET role='owner' WHERE username='devuser';"
-```
+The seeded accounts, from `seedDev.mjs`: email is `<username>@example.com`,
+password is `<username>1234`.
 
-Give that user a stocked collection so `/store` is non-empty:
+| username | role | notes |
+|---|---|---|
+| `fede` | owner | Fede Donner — the account to test admin routes with |
+| `lucia` | staff | Lucía Ferrari |
+| `ana` `diego` `martin` `sofia` | customer | consignors with stock, orders, wishlists |
 
-```bash
-psql -d mghsingles -v ON_ERROR_STOP=1 -c "
-UPDATE collection SET name='Main binder', active=true
- WHERE playerid=(SELECT id FROM player WHERE username='devuser');
-INSERT INTO card (scryfallid,conditionid,languageid,quantity,collectionid,variant,approved,price)
-SELECT v.sfid,v.cond,1,v.qty,c.id,v.variant,true,v.price
-FROM (VALUES ('d573ef03-4730-45aa-93dd-e45ac1dbaf4a',1,1,'nonfoil',4.50),
-             ('73542493-cd0b-4bb7-a5b8-8f889c76e4d6',1,8,'nonfoil',0.75),
-             ('0df55e3f-14de-46ef-b6b1-616618724d9e',1,2,'nonfoil',3.25),
-             ('c4300d24-1cae-4dd5-be7e-38cc677cf5bd',2,1,'nonfoil',1.10),
-             -- pf26 #8 is one of the few Llanowar Elves printings that really
-             -- is foil-only, so the UI has genuine foil stock to show.
-             ('cb49d52e-85ce-4f79-bfc3-0e312e6e161f',1,2,'foil',3.50)) AS v(sfid,cond,qty,variant,price)
-CROSS JOIN (SELECT id FROM collection
-            WHERE playerid=(SELECT id FROM player WHERE username='devuser') LIMIT 1) c;"
-```
-
-Those are real Scryfall ids seeded by `seed.sql`, so the store renders actual
-card images. The finishes match what each printing was actually produced in —
-`POST /card` rejects anything else.
+On a genuinely fresh, empty database (and only then), the order is: `seed.sql`
+(lookup tables), `npm run sync:scryfall` (catalogue), `npm run sync:prices`
+(reference prices), then `npm run seed:dev` — and even then, ask first.
 
 ## Scryfall sync
 
@@ -271,41 +257,48 @@ Against a server you already started:
 API_URL=http://localhost:3101 node .claude/skills/run-mghsingles-api/smoke.mjs --no-launch
 ```
 
-On a different port (use this when 3101 is taken):
+On a different port (use this when 3101 is taken — never 3000/3001):
 
 ```bash
-PORT=3101 node .claude/skills/run-mghsingles-api/smoke.mjs
+PORT=3102 node .claude/skills/run-mghsingles-api/smoke.mjs
 ```
 
-Verified output:
+Verified output (2026-09-22, against the live server on 3101):
 
 ```
-api up on http://localhost:3103 (pid 45342)
+login: POST /oauth -> 200 token=DXgCsZTkp7yEhVP9cXEq77KDg role=owner
 
-login: POST /oauth -> 200 token=EF9VRfZmb5MbzJpMKe2XyZDMA superuser=true
-
-200   /store/1                 {"numberOfCards":4,...,"available":6,"reserved":0,...}
-200   /store/search/bolt       {"numberOfCards":1,"numberOfPages":1,...}
-200   /card/modifiers          {"conditions":[{"id":1,"name":"NM"},...
-200   /card/sets               [{"cardsetname":"Core Set 2021",...
-200   /card/set/lea            {"cards":[{"scryfallid":"0df55e3f-...","name":"Counterspell",...
-200   /player/me               {"username":"devuser",...,"superuser":true}
-200   /collection              [{"id":1,"playerid":1,"active":true,...
-200   /collection/1            {"id":1,"active":true,"percent":"0.3",...
-200   /collection/all          [{"id":1,"name":"Dev User"},{"id":3,...
-200   /sale                    {"active":true,...,"sales":[...]}
-200   /admin/me                {"username":"devuser",...}
-200   /admin/pendingpayments   [{"name":"Dev User","sales":"10020.00",...}]
-200   /storage                 [{"id":4,"name":"Binder de Fede","type":"binder",...
+200   /store/filters           {"sets":[{"code":"30a","name":"30th Anniversary Edition"},...
+200   /store/search?name=a     {"numberOfCards":199,"numberOfPages":9,"page":1,"truncated":false,...
+200   /card/modifiers          {"conditions":[{"id":1,"name":"NM","sellmultiplier":"1",...
+200   /card/names?q=bolt       ["Bolt Bend","Bolt Hound","Bolt of Keranos",...
+200   /card/sets               [{"cardsetname":"Star Trek","releasedate":...
+200   /card/set/lea            {"cards":[{"scryfallid":"d5c83259-...","name":"Animate Wall",...
+200   /player/me               {"username":"fede","name":"Fede Donner","email":"fede@example.com","role":"owner",...
+200   /collection              [{"id":59,"playerid":59,"active":true,"percent":"0.3","name":"Personal",...
+200   /collection/59           {"id":59,"active":true,"percent":"0.3","name":"Personal",...
+200   /collection/all          [{"id":61,"playerid":61,"name":"Ana Rodríguez"},...
+200   /sale                    {"active":true,"percent":"0.3","name":"Personal","sales":[...
+200   /admin/me                {"name":"Fede Donner","email":"fede@example.com","phone":null,"role":"owner"}
+200   /admin/pendingpayments   [{"name":"Martín Silva","collectionid":62,"sales":"688.86",...
+200   /storage                 [{"id":98,"name":"Caja de otro nombre","type":"sorted_box","state":"for_sale",...
+200   /mystorage               []
+200   /mystorage/unfiled       []
 200   /order                   []
 200   /wishlist                []
-200   /admin/order             [{"id":1,"status":"completed",...
-200   /admin/wishlist          [{"name":"Black Lotus","wanted":1,"inStock":0},...
+200   /wishlist/covers?cardids=1,2 {}
+200   /admin/order             [{"id":118,"status":"pending",...
+200   /admin/wishlist          [{"name":"Sol Ring","wanted":1,"wanters":["Diego Pereyra"],...
+200   /admin/condition         [{"id":1,"name":"NM","sellmultiplier":"1",...
+200   /admin/player            [{"id":61,"name":"Ana Rodríguez","email":"ana@example.com",...,"role":"customer",...
+200   /admin/match             [{"playerid":63,"name":"Sofía Méndez","matches":[...
+200   /admin/cards/search?q=a  {"numberOfCards":200,"cards":[...
+200   /notification            {"unread":0,"items":[]}
 
-201   POST /card/1             {"message":"Su colección ha sido actualizada con éxito."}
-200   DELETE /card/19          {"scryfallid":"c4300d24-..."}
+201   POST /card/59           {"message":"Su colección ha sido actualizada con éxito.","card":{"id":...
+200   DELETE /card/1257       {"scryfallid":"5defb2d1-..."}
 
-0 route(s) never answered; 0 unhandled rejection(s) in server log
+0 route(s) never answered
 ```
 
 `HANG` in that output means a handler threw without responding. It should never
@@ -317,22 +310,37 @@ appear now that every handler is wrapped — if it does, something regressed.
 PORT=3101 node -r dotenv/config app.js
 ```
 
-Loading dotenv explicitly is required (see Gotchas). `--unhandled-rejections=warn`
+Loading dotenv explicitly is required — bare `node app.js` has no
+`DATABASE_URL`. `--unhandled-rejections=warn`
 used to be mandatory to stop one bad request killing the process; the
 `asyncHandler` wrapper and the error middleware in `app.js` make it unnecessary.
 
 ### Hand-rolled requests
 
+Login is by **email** (`username` is only read as a fallback field name, and it
+too is matched against `player.email`):
+
 ```bash
 curl -s -X POST http://localhost:3101/oauth -H 'Content-Type: application/json' \
-  -d '{"username":"devuser","password":"devpass123"}'
+  -d '{"email":"fede@example.com","password":"fede1234"}'
 ```
 
 ```bash
 TOK=$(curl -s -X POST http://localhost:3101/oauth -H 'Content-Type: application/json' \
-  -d '{"username":"devuser","password":"devpass123"}' \
+  -d '{"email":"fede@example.com","password":"fede1234"}' \
   | node -pe 'JSON.parse(require("fs").readFileSync(0,"utf8")).token')
 curl -s http://localhost:3101/player/me -H "Authorization: Bearer $TOK"
+```
+
+Token without a password (verified) — any row in `login` is a valid session,
+so a token can be injected directly. Delete it when done:
+
+```bash
+psql -d mghsingles -c "INSERT INTO login (playerid, token, date) SELECT id, 'devtoken1234567890abcdefg', now() FROM player WHERE email='fede@example.com';"
+```
+
+```bash
+psql -d mghsingles -c "DELETE FROM login WHERE token='devtoken1234567890abcdefg';"
 ```
 
 ## Run (human path)
@@ -350,17 +358,12 @@ Two caveats, both verified:
   a file. Less likely to bite now that handlers can't take the process down,
   but it is still how nodemon behaves.
 
-`npm start` runs `node app.js` with **no dotenv preload**, so `DATABASE_URL` is
-unset and every query fails at runtime. Don't use it.
+`npm start` now runs `node -r dotenv/config app.js`, so it works locally too —
+the old "npm start has no database" trap is fixed.
 
 ## Gotchas
 
-- **`npx prisma` installs v7 and refuses the schema** with `P1012: The
-  datasource property url is no longer supported`. There is no `prisma` entry
-  in `devDependencies`, so the version is unpinned. Always use `npx prisma@6.14.0`.
-
-- **`npm start` silently has no database.** Only `start-dev` preloads dotenv —
-  and `start-dev` needs a globally installed `nodemon`, which is not a project
+- **`start-dev` needs a globally installed `nodemon`**, which is not a project
   dependency.
 
 - **Every async handler must be wrapped in `asyncHandler`.** In Express 4 a
@@ -422,7 +425,9 @@ unset and every query fails at runtime. Don't use it.
   (`/admin/payment`, `/admin/pendingpayments`), pricing (`/admin/condition`,
   `/admin/card/:id/price`) and roles (`/admin/player*`) — carry **owner**
   individually, next to the thing they protect. Both gates return the same 403
-  and message, so probing tells you nothing.
+  and message, so probing tells you nothing. **TEMPORARY (2026-09-02):** the
+  `owner` export in `middleware/authentication.js` currently admits staff too
+  — staff and owner can do everything until it is tightened back to `["owner"]`.
 
 - **The role check is server-side; the menu is only a courtesy.** The admin app
   caches the role in localStorage to decide what to draw. Editing it buys a menu
@@ -746,35 +751,32 @@ unset and every query fails at runtime. Don't use it.
   also called `cardset`. UI components reading `card.cardset` were crashing on
   `undefined.toUpperCase()`.
 
-- **Only the newest login token per player is valid.** `middleware/authentication.js`
-  re-queries the latest `login` row and 403s if the presented token isn't it. So
-  running the smoke script logs out any browser session, and vice versa.
+- **Sessions coexist: any token in the `login` table is valid.** It used to be
+  the newest-only, which read as "the app keeps logging me out" with two
+  sessions. So the smoke script does NOT log out a browser session, and a
+  token can be injected with SQL (see Hand-rolled requests). `DELETE /oauth`
+  destroys exactly the presented token. Optional `TOKEN_TTL_DAYS` env var
+  bounds token age; unset means tokens live until logout.
 
-- **Usernames are not unique.** `POST /player` only checks that the *email* is
-  unused, and `player.username` has no unique constraint, so the same username
-  can be registered twice with different emails. Login uses `findFirst({where:{username}})`
-  and picks the lowest id. If auth starts behaving oddly, check for duplicates:
-  `psql -d mghsingles -c "SELECT id,username,email FROM player ORDER BY id;"`
-
-- **`/admin/*` needs `superuser=true`**, set directly in the database — no API
-  route grants it. Without it you get `403 {"message":"Ocurrió un error, ..."}`.
+- **There are no usernames any more — the email is the account identifier.**
+  `POST /player` takes `name`, `email`, `password` and `phone` (all
+  compulsory), and `/oauth` matches the identifier against `player.email`,
+  case-insensitively. The `player.username` column still exists (seedDev fills
+  it) but nothing authenticates by it.
 
 - **`GET /store/:page` now joins `cardgeneral`** and pages in the database.
   It used to load every card and slice in JS, and never joined the card
   definition, so store tiles had no name or image.
 
-- **`middleware/authentication.js` logs debug noise** (`login afuera: [object Object]`,
-  `hola`, `chau`) on every authenticated request. Not an error.
-
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `P1012 ... datasource property url is no longer supported` | `npx prisma@6.14.0`, not `npx prisma` |
-| `Error: listen EADDRINUSE :::3101` | Something else owns 3101. `lsof -nP -iTCP:3101 -sTCP:LISTEN`, then use another free port. **Never free 3000/3001** — an unrelated project owns them. |
-| `PrismaClientInitializationError` / `env(DATABASE_URL)` empty | Started with `npm start`; use `-r dotenv/config` |
+| `Error: listen EADDRINUSE :::3101` | Something else owns 3101. `lsof -nP -iTCP:3101 -sTCP:LISTEN`, then use another free port (3100-3102). **Never free 3000/3001** — an unrelated project owns them. |
+| `PrismaClientInitializationError` / `env(DATABASE_URL)` empty | Started without dotenv (bare `node app.js`); use `-r dotenv/config` |
 | `Cannot GET /store/1` on a port you expected | A *different* Express app is on that port — check with `lsof` |
 | Request hangs, server log shows `UnhandledPromiseRejection` | An async handler is missing its `asyncHandler` wrapper |
 | Server process vanishes mid-session | An unwrapped async handler threw; wrap it in `asyncHandler` |
-| `403 {"message":"Ocurrió un error..."}` on `/admin/*` | User is not superuser; `UPDATE player SET superuser=true ...` |
-| `/store/1` returns `numberOfCards: 0` | Collection rows exist but `active` is false, or no `card` rows — re-run the stocking SQL above |
+| `401` on `POST /oauth` with a good password | The identifier must be the **email** (`fede@example.com`), not the username |
+| `403 {"message":"Ocurrió un error..."}` on `/admin/*` | Account's `role` is `customer` — use `fede` (owner) or `lucia` (staff) |
+| `/store/1` returns `numberOfCards: 0` | Collections inactive or no stock — the user manages test data; ask before touching it |
