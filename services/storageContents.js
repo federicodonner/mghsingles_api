@@ -76,9 +76,11 @@ export function describeUnit(unit) {
 
 // Everything in a container, shaped for the type of container it is.
 //
-// `spread` (binders only) limits the read to one facing pair. Copies sitting in
-// a pick-up bag are excluded everywhere: they are physically in a bag on the
-// counter, not in the pocket their placement still records.
+// `spread` (binders only) limits the read to one facing pair. Copies sitting
+// in a pick-up bag are excluded everywhere: they are physically in a bag on
+// the counter, not in the container. Their placement keeps its coordinates
+// only as a MEMORY — where the copy came from, for the refile queue if the
+// order falls through — never as an occupied or reserved position.
 export async function readContents(prisma, unit, { spread } = {}) {
   const base = describeUnit(unit);
 
@@ -205,9 +207,13 @@ async function assertOwnerMayHold(prisma, card, unit) {
 // Pulling back INTO an occupied pocket stacks behind what is already there,
 // the same way a dragged card lands on an occupied pocket.
 //
-// A copy in the affected range that is set aside for an order refuses the
-// shift: somebody may be walking to its recorded coordinates right now, same
-// rule as moving that copy directly.
+// Copies set aside for an order do not block the shift — they are in a bag
+// on the counter, not on the page. Their placements are also NOT touched by
+// the blanket moves below: the remembered "where it came from" is frozen the
+// moment the copy is bagged, whatever happens to the binder afterwards, and
+// a cancelled order returns the copy to exactly that spot (the admin
+// rearranges from there if the spot is now taken). Freezing also means a
+// memory at the edge pocket can never be kicked to stand-by by a shift.
 export async function shiftBinderPage(prisma, unit, page, fromPocket, direction) {
   const ahead = direction === "ahead";
   if (
@@ -219,19 +225,6 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
     throw new ContentsError(messages.PARAMETERS_ERROR);
   }
 
-  const committed = await prisma.cardplacement.findFirst({
-    where: {
-      storageid: unit.id,
-      page,
-      pocket: { gte: fromPocket },
-      orderlineid: { not: null },
-    },
-    select: { id: true },
-  });
-  if (committed) {
-    throw new ContentsError(messages.PLACEMENT_COMMITTED);
-  }
-
   const ops = [];
   if (ahead) {
     // Kick first: the kicked rows lose their page, so the blanket move
@@ -239,7 +232,12 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
     // occupant is vacating, so nothing merges. Stacks travel whole.
     ops.push(
       prisma.cardplacement.updateMany({
-        where: { storageid: unit.id, page, pocket: POCKETS_PER_PAGE },
+        where: {
+          storageid: unit.id,
+          page,
+          pocket: POCKETS_PER_PAGE,
+          orderlineid: null,
+        },
         data: { page: null, pocket: null, depth: null },
       }),
       prisma.cardplacement.updateMany({
@@ -247,6 +245,7 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
           storageid: unit.id,
           page,
           pocket: { gte: fromPocket, lt: POCKETS_PER_PAGE },
+          orderlineid: null,
         },
         data: { pocket: { increment: 1 } },
       })
@@ -254,11 +253,16 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
   } else if (fromPocket === 1) {
     ops.push(
       prisma.cardplacement.updateMany({
-        where: { storageid: unit.id, page, pocket: 1 },
+        where: { storageid: unit.id, page, pocket: 1, orderlineid: null },
         data: { page: null, pocket: null, depth: null },
       }),
       prisma.cardplacement.updateMany({
-        where: { storageid: unit.id, page, pocket: { gt: 1 } },
+        where: {
+          storageid: unit.id,
+          page,
+          pocket: { gt: 1 },
+          orderlineid: null,
+        },
         data: { pocket: { decrement: 1 } },
       })
     );
@@ -274,14 +278,24 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
     if (behind > 0) {
       ops.push(
         prisma.cardplacement.updateMany({
-          where: { storageid: unit.id, page, pocket: fromPocket },
+          where: {
+            storageid: unit.id,
+            page,
+            pocket: fromPocket,
+            orderlineid: null,
+          },
           data: { depth: { increment: behind } },
         })
       );
     }
     ops.push(
       prisma.cardplacement.updateMany({
-        where: { storageid: unit.id, page, pocket: { gte: fromPocket } },
+        where: {
+          storageid: unit.id,
+          page,
+          pocket: { gte: fromPocket },
+          orderlineid: null,
+        },
         data: { pocket: { decrement: 1 } },
       })
     );
@@ -292,10 +306,11 @@ export async function shiftBinderPage(prisma, unit, page, fromPocket, direction)
 // Reorder the stack inside one binder pocket.
 //
 // `placementids` is the pocket's visible stack in its new order, front first —
-// depth 1 is the card you SEE in the pocket. Copies set aside for an order are
-// not offered in the dialog and cannot be reordered; they keep their relative
-// order behind the visible stack, so their depths stay meaningful without ever
-// colliding.
+// depth 1 is the card you SEE in the pocket. Copies set aside for an order
+// are not offered in the dialog and are not touched here at all: their
+// remembered depth is frozen until the order resolves. A frozen depth may
+// collide with a visible card's — harmless, nothing renders or keys on the
+// remembered coordinates.
 export async function reorderPocketStack(prisma, unit, page, pocket, placementids) {
   if (
     unit.type !== "binder" ||
@@ -323,21 +338,11 @@ export async function reorderPocketStack(prisma, unit, page, pocket, placementid
     throw new ContentsError(messages.PARAMETERS_ERROR);
   }
 
-  const bagged = inPocket
-    .filter((pl) => pl.orderlineid !== null)
-    .sort((a, b) => (a.depth ?? 0) - (b.depth ?? 0));
-
-  await prisma.$transaction([
-    ...ids.map((id, i) =>
+  await prisma.$transaction(
+    ids.map((id, i) =>
       prisma.cardplacement.update({ where: { id }, data: { depth: i + 1 } })
-    ),
-    ...bagged.map((pl, i) =>
-      prisma.cardplacement.update({
-        where: { id: pl.id },
-        data: { depth: ids.length + i + 1 },
-      })
-    ),
-  ]);
+    )
+  );
 }
 
 // Put one copy of a card into a container.
@@ -410,8 +415,13 @@ export async function placeCopy(prisma, unit, body) {
     if (body.sequence !== undefined) {
       data.sequence = parseInt(body.sequence, 10);
       // Make room by shifting everything at or after this position back.
+      // Bagged copies' remembered sequences are frozen (see shiftBinderPage).
       await prisma.cardplacement.updateMany({
-        where: { storageid: unit.id, sequence: { gte: data.sequence } },
+        where: {
+          storageid: unit.id,
+          sequence: { gte: data.sequence },
+          orderlineid: null,
+        },
         data: { sequence: { increment: 1 } },
       });
     } else {
@@ -438,6 +448,7 @@ export async function removePlacement(prisma, placement) {
           page: placement.page,
           pocket: placement.pocket,
           depth: { gt: placement.depth },
+          orderlineid: null,
         },
         data: { depth: { decrement: 1 } },
       });
@@ -446,6 +457,7 @@ export async function removePlacement(prisma, placement) {
         where: {
           storageid: placement.storageid,
           sequence: { gt: placement.sequence },
+          orderlineid: null,
         },
         data: { sequence: { decrement: 1 } },
       });
@@ -509,6 +521,7 @@ export async function setBinderPosition(prisma, placement, body) {
         page: placement.page,
         pocket: placement.pocket,
         depth: { gt: placement.depth },
+        orderlineid: null,
       },
       data: { depth: { decrement: 1 } },
     });
@@ -538,8 +551,11 @@ export async function reorderSorted(prisma, unit, rawIds) {
     .map((n) => parseInt(n, 10))
     .filter((n) => n > 0);
 
+  // Bagged copies never appear in the caller's list (they are hidden from
+  // every view), and a stale client that still names one must not thaw its
+  // frozen remembered sequence.
   const mine = await prisma.cardplacement.findMany({
-    where: { storageid: unit.id, id: { in: ids } },
+    where: { storageid: unit.id, id: { in: ids }, orderlineid: null },
     select: { id: true },
   });
   const allowed = new Set(mine.map((p) => p.id));

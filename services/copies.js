@@ -36,7 +36,8 @@ export async function removeCopy(prisma, placement) {
   return prisma.$transaction(async (tx) => {
     await tx.cardplacement.delete({ where: { id: placement.id } });
 
-    // Close the gap so positions stay contiguous.
+    // Close the gap so positions stay contiguous. Bagged copies' remembered
+    // coordinates are frozen and never travel with these adjustments.
     if (placement.storage?.type === "binder" && placement.pocket !== null) {
       await tx.cardplacement.updateMany({
         where: {
@@ -44,6 +45,7 @@ export async function removeCopy(prisma, placement) {
           page: placement.page,
           pocket: placement.pocket,
           depth: { gt: placement.depth },
+          orderlineid: null,
         },
         data: { depth: { decrement: 1 } },
       });
@@ -52,6 +54,7 @@ export async function removeCopy(prisma, placement) {
         where: {
           storageid: placement.storageid,
           sequence: { gt: placement.sequence },
+          orderlineid: null,
         },
         data: { sequence: { decrement: 1 } },
       });
@@ -173,6 +176,7 @@ export async function duplicateCopy(prisma, placement) {
         where: {
           storageid: placement.storageid,
           sequence: { gt: placement.sequence },
+          orderlineid: null,
         },
         data: { sequence: { increment: 1 } },
       });
@@ -379,9 +383,10 @@ export async function addPrintingCopy(
         data.sequence = (last._max.sequence ?? 0) + 1;
       } else {
         // To the front, and everything else shifts back — a hand-added card
-        // is the one you are holding.
+        // is the one you are holding. Bagged copies' remembered sequences
+        // stay frozen.
         await tx.cardplacement.updateMany({
-          where: { storageid: unit.id },
+          where: { storageid: unit.id, orderlineid: null },
           data: { sequence: { increment: 1 } },
         });
         data.sequence = 1;
