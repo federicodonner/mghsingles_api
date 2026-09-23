@@ -261,6 +261,60 @@ router.get(
   })
 );
 
+// The three dearest cards in each browsable container, for the fan of art on
+// its tile. Dearest first, so the priciest is the one in front.
+//
+// One query for every container rather than one per container: a shop with
+// forty binders is forty round trips otherwise, on a page that is pure
+// decoration. Raw SQL because "top 3 per group" is a window function, which
+// Prisma's query API cannot express.
+//
+// Only cards a shopper could actually buy are eligible — priced, approved, in
+// an active collection, not in somebody's pick-up bag. A fan advertising a
+// card that is not for sale is a promise the page cannot keep. Printings are
+// deduplicated (DISTINCT ON): four copies of the same bomb is one picture,
+// not the same picture three times.
+const TOP_CARDS_PER_UNIT = 3;
+
+async function topCardsPerUnit(prisma) {
+  const rows = await prisma.$queryRaw`
+    WITH best AS (
+      SELECT DISTINCT ON (p.storageid, cg.scryfallid)
+             p.storageid, cg.name, cg.image, c.price
+        FROM cardplacement p
+        JOIN card c ON c.id = p.cardid
+        JOIN cardgeneral cg ON cg.scryfallid = c.scryfallid
+        JOIN storage s ON s.id = p.storageid
+        JOIN collection col ON col.id = c.collectionid
+       WHERE p.orderlineid IS NULL
+         AND s.state = 'for_sale'
+         AND s.browsable = true
+         AND c.approved
+         AND col.active
+         AND c.price IS NOT NULL
+         AND cg.image IS NOT NULL
+       ORDER BY p.storageid, cg.scryfallid, c.price DESC
+    ), ranked AS (
+      SELECT storageid, name, image,
+             ROW_NUMBER() OVER (
+               PARTITION BY storageid ORDER BY price DESC, name ASC
+             ) AS rn
+        FROM best
+    )
+    SELECT storageid, name, image
+      FROM ranked
+     WHERE rn <= ${TOP_CARDS_PER_UNIT}
+     ORDER BY storageid, rn`;
+
+  const byUnit = new Map();
+  for (const row of rows) {
+    const list = byUnit.get(row.storageid) ?? [];
+    list.push({ name: row.name, image: row.image });
+    byUnit.set(row.storageid, list);
+  }
+  return byUnit;
+}
+
 // The containers a shopper can leaf through, the way they would at the
 // physical counter.
 //
@@ -268,21 +322,29 @@ router.get(
 // their cards on sale. Empty ones are left out — an empty binder is a
 // guaranteed dead end, same reasoning as the filters above. No owner: whose
 // consignment a container is has never been the storefront's business.
+//
+// `browsable` is the shop saying this particular container is not something to
+// page through — a working set checklist, a box of bulk. Its cards are still
+// on sale and still found by /store/search; only the container is not on the
+// shelf to be leafed through.
 router.get(
   "/units",
   asyncHandler(async (req, res) => {
     const prisma = req.prisma;
-    const units = await prisma.storage.findMany({
-      where: { state: "for_sale" },
-      include: {
-        // Bagged copies are physically out of the container, so they do not
-        // count toward what a browser would find in it.
-        _count: {
-          select: { cardplacement: { where: { orderlineid: null } } },
+    const [units, highlights] = await Promise.all([
+      prisma.storage.findMany({
+        where: { state: "for_sale", browsable: true },
+        include: {
+          // Bagged copies are physically out of the container, so they do not
+          // count toward what a browser would find in it.
+          _count: {
+            select: { cardplacement: { where: { orderlineid: null } } },
+          },
         },
-      },
-      orderBy: { name: "asc" },
-    });
+        orderBy: { name: "asc" },
+      }),
+      topCardsPerUnit(prisma),
+    ]);
 
     return res.status(200).json(
       units
@@ -294,6 +356,9 @@ router.get(
           name: storeName(u),
           type: u.type,
           cardcount: u._count.cardplacement,
+          // The three best cards in it, dearest first — what the card on the
+          // shelf page shows instead of a number.
+          topcards: highlights.get(u.id) ?? [],
           // The viewer's own container is flagged so the storefront can mark it
           // "propio" and hide prices inside it. Only the boolean leaves.
           mine: req.playerId != null && u.playerid === req.playerId,
@@ -320,8 +385,10 @@ router.get(
     const unit = await prisma.storage.findUnique({ where: { id } });
     // Not-for-sale answers the same 404 as nonexistent on purpose: a retired
     // container's contents are off the market, and the storefront saying
-    // "it exists but you can't look" would only invite probing.
-    if (!unit || unit.state !== "for_sale") {
+    // "it exists but you can't look" would only invite probing. A container
+    // the shop took off the browse shelf answers the same way — otherwise
+    // hiding it from the list would only hide the link to it.
+    if (!unit || unit.state !== "for_sale" || !unit.browsable) {
       return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
     }
 

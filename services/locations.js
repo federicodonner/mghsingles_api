@@ -38,6 +38,10 @@ export function describeLocation(placement) {
     pocket: placement.pocket,
     depth: placement.depth,
     sequence: placement.sequence,
+    // An edition box has no stored position: the collector number printed on
+    // the card is where it sits. Carried for every container type because it
+    // costs one join and tells staff which card they are holding.
+    collectornumber: placement.card?.cardgeneral?.collectornumber ?? null,
     // Set while the copy is in a customer's bag rather than in the container.
     bagged: placement.orderlineid !== null && placement.orderlineid !== undefined,
   };
@@ -53,14 +57,24 @@ export const LOCATION_INCLUDE = {
       type: true,
       state: true,
       playerid: true,
+      cardsetcode: true,
       player: { select: { name: true } },
     },
   },
+  card: {
+    select: { cardgeneral: { select: { collectornumber: true } } },
+  },
 };
 
-// Binder placements first, then sorted boxes, then unsorted — roughly how
+// Binder placements first, then edition boxes (the collector number says
+// exactly where to reach), then sorted boxes, then unsorted — roughly how
 // quickly someone can actually lay hands on the card.
-const TYPE_ORDER = { binder: 0, sorted_box: 1, unsorted_box: 2 };
+const TYPE_ORDER = {
+  binder: 0,
+  edition_box: 1,
+  sorted_box: 2,
+  unsorted_box: 3,
+};
 
 export function sortLocations(locations) {
   return locations.slice().sort((a, b) => {

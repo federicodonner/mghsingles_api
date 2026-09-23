@@ -7,6 +7,7 @@
 //
 // Nothing in this file decides WHO may call it. That is the route's job.
 import messages from "../data/messages.js";
+import { compareEditionRow } from "./editionOrder.js";
 
 export const POCKETS_PER_PAGE = 9; // 3x3
 
@@ -53,6 +54,9 @@ export function describePlacement(placement) {
     name: card?.cardgeneral?.name ?? null,
     cardsetcode: card?.cardgeneral?.cardsetcode ?? null,
     cardsetname: card?.cardgeneral?.cardsetname ?? null,
+    // What an edition box is ordered by, and the number printed on the card
+    // itself — worth showing wherever a copy is listed.
+    collectornumber: card?.cardgeneral?.collectornumber ?? null,
     image: card?.cardgeneral?.image ?? null,
     variant: card?.variant ?? null,
     condition: card?.cardcondition?.name ?? null,
@@ -71,6 +75,12 @@ export function describeUnit(unit) {
     state: unit.state,
     forsale: unit.state === "for_sale",
     owner: unit.player ? { id: unit.player.id, name: unit.player.name } : null,
+    // Which set an edition box holds. Null for every other type.
+    cardsetcode: unit.cardsetcode ?? null,
+    cardsetname: unit.cardset?.cardsetname ?? null,
+    // Whether shoppers may leaf through this container in the storefront.
+    // Independent of whether its cards are on sale — see the schema.
+    browsable: unit.browsable ?? true,
   };
 }
 
@@ -158,6 +168,15 @@ export async function readContents(prisma, unit, { spread } = {}) {
     orderBy: unit.type === "sorted_box" ? { sequence: "asc" } : { id: "asc" },
   });
   base.cards = placements.map(describePlacement);
+
+  // An edition box is sorted too, but by the set's own order rather than one
+  // anybody chose, so it stores no sequence: the collector number printed on
+  // the card IS the position. Sorting here (not in SQL) because the number is
+  // a string — see services/editionOrder.js.
+  if (unit.type === "edition_box") {
+    base.cards.sort(compareEditionRow);
+  }
+
   base.cardcount = placements.length;
   return base;
 }
@@ -460,9 +479,21 @@ export async function movePlacement(prisma, placement, unit, body) {
   if (unit.id !== placement.storageid) {
     const card = await prisma.card.findUnique({
       where: { id: placement.cardid },
-      include: { collection: { select: { playerid: true } } },
+      include: {
+        collection: { select: { playerid: true } },
+        cardgeneral: { select: { cardsetcode: true } },
+      },
     });
     await assertOwnerMayHold(prisma, card, unit);
+    // An edition box holds ONE set. A card from another set moved into it
+    // would be a copy the checklist has no line for — present in the box and
+    // invisible in the only view the box has.
+    if (
+      unit.type === "edition_box" &&
+      card?.cardgeneral?.cardsetcode !== unit.cardsetcode
+    ) {
+      throw new ContentsError(messages.EDITION_WRONG_SET);
+    }
   }
 
   const data = {

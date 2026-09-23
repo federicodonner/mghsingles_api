@@ -180,6 +180,7 @@ model cardset {
   digital     Boolean       @default(false)
   cardset     String        @id
   cardgeneral cardgeneral[]
+  storage     storage[]
 }
 
 model collection {
@@ -326,6 +327,21 @@ model storage {
   /// Only `for_sale` puts cards on sale. A shop-owned container is always
   /// for_sale: there is nobody to hand it to.
   state         storagestate    @default(for_sale)
+  /// Whether this container appears in the storefront's "leaf through the
+  /// shelf" section. It is about the CONTAINER, not its cards: a container
+  /// nobody can browse still has every one of its cards on sale and findable
+  /// by search — only the binder itself stops being something to page through.
+  ///
+  /// True for everything the shop puts on a shelf to be looked at. False by
+  /// default for an `edition_box`, which is a working set checklist: hundreds
+  /// of lines, most of them empty, is a page nobody wants to leaf through.
+  browsable     Boolean         @default(true)
+  /// Which set an `edition_box` holds. Null for every other type — a binder or
+  /// a plain box takes whatever is put in it, so tying it to a set would be a
+  /// promise nothing keeps. Required (and enforced by the route) for
+  /// `edition_box`, which is nothing but a set's checklist with quantities.
+  cardsetcode   String?
+  cardset       cardset?        @relation(fields: [cardsetcode], references: [cardset], onDelete: NoAction, onUpdate: NoAction, map: "storage_cardset")
   player        player?         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "storage_player")
   cardplacement cardplacement[]
 
@@ -380,6 +396,12 @@ enum storagetype {
   binder
   sorted_box
   unsorted_box
+  /// A sorted box holding ONE set, laid out as that set's checklist: every
+  /// paper printing in the set, in collector-number order, each finish its own
+  /// line, with a quantity the shop sets directly. Shop-owned only — it is the
+  /// shop's own stock organised the way a set binder is, not a consignment.
+  /// `storage.cardsetcode` says which set, and is required for this type only.
+  edition_box
 }
 
 /// A customer's reservation. Nothing is paid online — the shop holds the cards

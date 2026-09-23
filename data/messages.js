@@ -78,6 +78,17 @@ const messages = {
   STORAGE_FOR_SALE: "El contenedor está en la tienda y sus cartas a la venta.",
   STORAGE_OFF_SALE:
     "El contenedor fue retirado de la venta. Sus cartas dejan de venderse.",
+  STORAGE_NOT_EDITION: "Ese contenedor no es una caja de edición.",
+  EDITION_SET_REQUIRED:
+    "Una caja de edición necesita una edición; elegí cuál antes de crearla.",
+  EDITION_SHOP_ONLY:
+    "Las cajas de edición son de la tienda, no pueden tener otro dueño.",
+  EDITION_WRONG_SET:
+    "Esa carta no pertenece a la edición de esta caja.",
+  EDITION_QUANTITY_TOO_HIGH:
+    "Demasiadas copias de la misma carta para una caja de edición.",
+  EDITION_USE_QUANTITIES:
+    "En una caja de edición las cartas se cargan con la cantidad de cada una, no de a una.",
   CARD_NOT_YOURS: "Esa carta no es tuya.",
   CARD_DIGITAL_ONLY:
     "Esa versión sólo existe en formato digital (Arena o MTGO), no se puede vender en la tienda.",

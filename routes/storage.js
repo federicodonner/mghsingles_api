@@ -1,4 +1,5 @@
-// Route file for physical storage: binders, sorted boxes and unsorted boxes.
+// Route file for physical storage: binders, sorted boxes, unsorted boxes
+// and edition boxes.
 //
 // Mounted at /storage behind the staff middleware (see app.js). This is the
 // shop's view: every container, whoever owns it.
@@ -48,8 +49,24 @@ import {
 } from "../services/copies.js";
 import { requirePlayerId } from "../middleware/asyncHandler.js";
 import { storeName } from "../services/locations.js";
+import {
+  readEditionRows,
+  setEditionQuantity,
+  MAX_EDITION_QUANTITY,
+} from "../services/editionBox.js";
 
-const TYPES = ["binder", "sorted_box", "unsorted_box"];
+const TYPES = ["binder", "sorted_box", "unsorted_box", "edition_box"];
+
+// An edition box is the shop's own stock arranged as a set checklist. It has
+// no owner to consign to and no per-card add: the quantity beside each line is
+// the only way cards go in or out. These two helpers say that once.
+const isEdition = (unit) => unit?.type === "edition_box";
+
+function assertNotEdition(unit) {
+  if (isEdition(unit)) {
+    throw new ContentsError(messages.EDITION_USE_QUANTITIES);
+  }
+}
 
 const STATE_MESSAGE = {
   for_sale: messages.STORAGE_FOR_SALE,
@@ -111,6 +128,7 @@ router.get(
         where,
         include: {
           player: { select: { id: true, name: true } },
+          cardset: { select: { cardsetname: true } },
           // Copies in a pick-up bag are not physically in the container, so
           // they must not be counted as being in it — the contents view
           // already excludes them, and a count that disagreed would look
@@ -132,6 +150,12 @@ router.get(
         type: u.type,
         state: u.state,
         forsale: u.state === "for_sale",
+        // Which set an edition box holds; null for every other type.
+        cardsetcode: u.cardsetcode,
+        cardsetname: u.cardset?.cardsetname ?? null,
+        // Whether shoppers can leaf through this container in the storefront.
+        // Nothing to do with whether its cards are on sale — they always are.
+        browsable: u.browsable,
         owner: u.player ? { id: u.player.id, name: u.player.name } : null,
         cardcount: u._count.cardplacement,
         // What the shop may do with it next, so the UI does not reimplement the
@@ -160,6 +184,11 @@ router.get(
 // it starts in THEIR hands (released) and only they know what they own. The
 // shop creating furniture on a customer's behalf would invent a container the
 // customer never brought in, so no owner is accepted here.
+//
+// An edition box also takes `cardset`, and takes it ONLY at creation: the set
+// is what the box is, so changing it later would not relabel a box, it would
+// claim a different box's contents. Getting the set wrong means making a new
+// one, which for an empty box is the same amount of work anyway.
 router.post(
   "/",
   [check("name").trim().notEmpty(), check("type").isIn(TYPES)],
@@ -169,14 +198,38 @@ router.post(
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
     const prisma = req.prisma;
+    const type = req.body.type;
+
+    let cardsetcode = null;
+    if (type === "edition_box") {
+      cardsetcode = String(req.body.cardset ?? "").trim().toLowerCase();
+      if (!cardsetcode) {
+        return res
+          .status(400)
+          .json({ message: messages.EDITION_SET_REQUIRED });
+      }
+      // A digital-only set has no paper printings at all after the sync's
+      // purge, so a box for one could only ever be an empty checklist.
+      const set = await prisma.cardset.findUnique({
+        where: { cardset: cardsetcode },
+      });
+      if (!set || set.digital) {
+        return res.status(404).json({ message: messages.SET_NOT_FOUND });
+      }
+    }
 
     const unit = await prisma.storage.create({
       data: {
         name: String(req.body.name).trim(),
-        type: req.body.type,
+        type,
+        cardsetcode,
         playerid: null,
         // Created by the shop, so it is on the shelf and for sale.
         state: "for_sale",
+        // Everything is browsable except an edition box: a set checklist is
+        // hundreds of lines, most of them empty, which is a page to work
+        // from and not one to leaf through. The shop can turn it on.
+        browsable: type !== "edition_box",
       },
     });
 
@@ -184,12 +237,17 @@ router.post(
   })
 );
 
-// Edit a container the shop holds: its store label (name) and/or its owner.
+// Edit a container the shop holds: its store label (name), its owner, and/or
+// whether shoppers can leaf through it.
 //
 // Changing the owner re-homes every card inside it into the new owner's active
 // collection (services/copies.js), so the container and its cards agree on who
 // gets paid when they sell — see the owner-change decision. `owner`: a player
 // id to assign to a customer, or null to make it the shop's own.
+//
+// `browsable` is the shop's alone, even on a customer's consigned binder: it
+// says what the shop puts on display, not what the cards are worth or whether
+// they sell. Turning it off takes nothing off sale.
 router.put(
   "/:storageId",
   [check("storageId").isNumeric()],
@@ -216,7 +274,8 @@ router.put(
     );
     const wantsNameChange =
       typeof req.body.name === "string" && req.body.name.trim().length > 0;
-    if (!wantsOwnerChange && !wantsNameChange) {
+    const wantsBrowsableChange = typeof req.body.browsable === "boolean";
+    if (!wantsOwnerChange && !wantsNameChange && !wantsBrowsableChange) {
       return res.status(400).json({ message: messages.PARAMETERS_ERROR });
     }
 
@@ -231,6 +290,12 @@ router.put(
         raw === null || raw === "" || raw === "shop" ? null : parseInt(raw, 10);
       if (newPlayerId !== null && !(newPlayerId > 0)) {
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      // An edition box is the shop's own set, filled by typing quantities.
+      // Handing one to a customer would give them a container they cannot
+      // edit and the shop a checklist it no longer owns.
+      if (isEdition(unit) && newPlayerId !== null) {
+        return res.status(400).json({ message: messages.EDITION_SHOP_ONLY });
       }
       if (newPlayerId !== unit.playerid) {
         // A copy sitting in a pick-up bag is mid-sale; re-homing it would move
@@ -286,12 +351,17 @@ router.put(
       }
     }
 
+    const data = {};
     if (wantsNameChange) {
       const label = req.body.name.trim();
-      await prisma.storage.update({
-        where: { id },
-        data: effectivePlayerId === null ? { name: label } : { storename: label },
-      });
+      // Shop furniture has one name; a customer's container keeps the owner's
+      // `name` and takes a `storename`.
+      if (effectivePlayerId === null) data.name = label;
+      else data.storename = label;
+    }
+    if (wantsBrowsableChange) data.browsable = req.body.browsable;
+    if (Object.keys(data).length) {
+      await prisma.storage.update({ where: { id }, data });
     }
 
     const finalUnit = await prisma.storage.findUnique({
@@ -302,6 +372,7 @@ router.put(
       id: finalUnit.id,
       name: storeName(finalUnit),
       state: finalUnit.state,
+      browsable: finalUnit.browsable,
       owner: finalUnit.player
         ? { id: finalUnit.player.id, name: finalUnit.player.name }
         : null,
@@ -454,7 +525,10 @@ router.get(
 
     const unit = await req.prisma.storage.findUnique({
       where: { id },
-      include: { player: { select: { id: true, name: true } } },
+      include: {
+        player: { select: { id: true, name: true } },
+        cardset: { select: { cardsetname: true } },
+      },
     });
     if (!unit) {
       return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
@@ -479,6 +553,118 @@ router.get(
     contents.editable = unit.playerid === null || shopHolds(unit.state);
     contents.arrangeable = contents.editable;
     return res.status(200).json(contents);
+  })
+);
+
+// --------------------------------------------------------------------------
+// Edition boxes — the set as a checklist
+// --------------------------------------------------------------------------
+
+// Find an edition box, or say why this is not one.
+//
+// Both edition routes need the same three answers — does it exist, is it an
+// edition box, may the shop touch it — so they ask once here.
+async function findEditionBox(prisma, res, rawId) {
+  const unit = await prisma.storage.findUnique({
+    where: { id: parseInt(rawId, 10) },
+    include: { cardset: { select: { cardsetname: true } } },
+  });
+  if (!unit) {
+    res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+    return null;
+  }
+  if (!isEdition(unit)) {
+    res.status(400).json({ message: messages.STORAGE_NOT_EDITION });
+    return null;
+  }
+  // Always shop-owned by construction, but the check costs nothing and keeps
+  // the rule readable next to the route that relies on it.
+  if (unit.playerid !== null) {
+    res.status(400).json({ message: messages.EDITION_SHOP_ONLY });
+    return null;
+  }
+  return unit;
+}
+
+// The checklist: every paper printing in the box's set, every finish it came
+// in, with how many of each the shop has. Zero-quantity rows are the point —
+// the box is a set to be completed.
+//
+// Deliberately NOT folded into GET /:storageId. That route answers "what is in
+// this container", and the honest answer for an edition box is the copies it
+// holds — which is what the storefront and every other reader want. The
+// checklist is a different, much bigger question, asked only by the page that
+// edits the box.
+router.get(
+  "/:storageId/edition",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const unit = await findEditionBox(req.prisma, res, req.params.storageId);
+    if (!unit) return;
+
+    try {
+      const edition = await readEditionRows(req.prisma, unit);
+      return res.status(200).json({
+        id: unit.id,
+        name: storeName(unit),
+        max: MAX_EDITION_QUANTITY,
+        ...edition,
+      });
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Set how many copies of one printing+finish the box holds.
+//
+// Body: { scryfallid, variant, quantity }. An absolute number rather than a
+// delta, because that is what the shop is looking at: somebody counting a box
+// types what they counted. Two people editing at once therefore settle on the
+// last number typed instead of adding their two increments together, which is
+// the right answer when both are reading the same physical box.
+router.put(
+  "/:storageId/edition",
+  [check("storageId").isNumeric(), check("scryfallid").trim().notEmpty()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const unit = await findEditionBox(prisma, res, req.params.storageId);
+    if (!unit) return;
+
+    // Shop stock lands in the acting staff member's collection, exactly like
+    // a manual add into any other piece of the shop's furniture.
+    const collection = await prisma.collection.findFirst({
+      where: { playerid: playerId, active: true },
+      select: { id: true },
+    });
+    if (!collection) {
+      console.error(
+        `No active collection for player ${playerId} while setting a ` +
+          `quantity in edition box ${unit.id}`
+      );
+      return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
+    }
+
+    try {
+      const result = await setEditionQuantity(prisma, unit, collection.id, {
+        scryfallid: String(req.body.scryfallid).trim(),
+        variant: String(req.body.variant ?? DEFAULT_FINISH).trim(),
+        quantity: parseInt(req.body.quantity, 10),
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      return handle(err, res);
+    }
   })
 );
 
@@ -669,6 +855,7 @@ router.put(
       // Held-container editing (see the delete route): a change of version is
       // an edit the shop may make on a container it holds.
       assertShopMayArrange(placement.storage);
+      assertNotEdition(placement.storage);
       const scryfallid = String(req.body.scryfallid ?? "").trim();
       const variant = String(req.body.variant ?? "").trim();
       const printing = await req.prisma.cardgeneral.findUnique({
@@ -849,6 +1036,8 @@ router.post(
 
     try {
       assertShopMayArrange(unit);
+      // A CSV carries cards from any set; an edition box holds exactly one.
+      assertNotEdition(unit);
 
       // Shop-owned containers file into the acting staff member's collection;
       // a customer's container into the customer's. If that collection is
@@ -918,6 +1107,10 @@ router.post(
       // Physically held is the bar (for_sale or retired) — recording a card
       // into a binder in the customer's living room would be fiction.
       assertShopMayArrange(unit);
+      // An edition box is filled by typing quantities on its checklist, not
+      // one card at a time — and its checklist is the only view it has, so a
+      // card added here from another set would be invisible inside it.
+      assertNotEdition(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
       // The UI no longer asks for condition or language — a manual add is
