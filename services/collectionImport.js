@@ -58,7 +58,7 @@ const LANGUAGE_MAP = {
 
 // Finish words (both apps) onto the shop's three. Delver writes "Foil"/"Etched"
 // or leaves it blank; ManaBox writes "normal"/"foil"/"etched".
-const FINISH_MAP = {
+export const FINISH_MAP = {
   "": "nonfoil",
   normal: "nonfoil",
   nonfoil: "nonfoil",
@@ -68,7 +68,7 @@ const FINISH_MAP = {
 };
 
 // Header names normalised for lookup: "Collector number" -> "collectornumber".
-const normalise = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
+export const normalise = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // A CSV reader that yields RECORDS, not lines: a quoted field may contain
 // commas AND newlines (Delver's Rules Text does), so splitting on line breaks
@@ -208,8 +208,8 @@ export function parseImportFile(text) {
 
 // Ceilings on one import, so a single request cannot drive unbounded database
 // work. A real scanned binder or exported collection is well within both.
-const MAX_ROWS = 5000;
-const MAX_ROW_QUANTITY = 100;
+export const MAX_ROWS = 5000;
+export const MAX_ROW_QUANTITY = 100;
 
 // Run the import. `unit` is the container, `collectionid` whose cards these
 // become. Auto-detects the format. Returns a summary; never throws for a bad

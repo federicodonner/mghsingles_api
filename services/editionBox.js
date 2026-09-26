@@ -20,7 +20,14 @@ import { PAPER_ONLY, isPaperPrinting } from "./paper.js";
 import { finishesFor } from "./finishes.js";
 import { defaultIdentity } from "./identity.js";
 import { addPrintingCopy, removeCopy } from "./copies.js";
-import { compareEditionRow } from "./editionOrder.js";
+import { compareEditionRow, compareCollectorNumber } from "./editionOrder.js";
+import {
+  parseImportFile,
+  MAX_ROWS,
+  MAX_ROW_QUANTITY,
+  FINISH_MAP,
+  normalise,
+} from "./collectionImport.js";
 
 // The most copies of one printing+finish an edition box will record.
 //
@@ -192,4 +199,167 @@ export async function setEditionQuantity(
   }
 
   return { scryfallid: printing.scryfallid, variant, quantity };
+}
+
+// A card name as the import compares it: case, accents and spacing do not
+// make two cards different. "Æther" and "Aether" are the same card to anyone
+// typing it, and an export app's spelling is not the shop's to argue with.
+const nameKey = (s) =>
+  String(s ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/æ/gi, "ae")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+// Import a ManaBox or Delver export into an edition box.
+//
+// The box is its set, so every row is read as "a card of THIS set" — but as
+// precisely as the file allows:
+//
+//   1. The row's own printing (Scryfall id, else set code + collector number)
+//      when it is one of this set's — a showcase, an etched, a promo number is
+//      filed exactly as scanned.
+//   2. Otherwise the row's card NAME within the set. Scanners misread the set
+//      symbol all the time; a card the set has is the card the shop meant,
+//      whatever edition the app guessed.
+//
+// Either way the file's finish is kept when the set has the card in it: a
+// foil lands on the foil line, and where the foil or etched version is its own
+// printing (etched usually is), the name search picks the printing that offers
+// it. Only when the set has no such finish for the card does it fall back to
+// the plain one — or, for an exactly-scanned printing, to that printing's own
+// finish.
+//
+// Rows landing on the same printing+finish add up — "2x A" and later "1x A" is
+// three copies of A. A name the set does not have is not a failure of the
+// file: the rest is imported and that card is reported, with why, so the shop
+// can deal with it by hand. Nothing here throws for a row.
+export async function importEditionBox(prisma, unit, collectionid, text) {
+  if (unit.type !== "edition_box" || !unit.cardsetcode) {
+    throw new ContentsError(messages.STORAGE_NOT_EDITION);
+  }
+  const { format, entries } = parseImportFile(text);
+  if (!format) {
+    return { ok: false, added: 0, errors: [], badFile: true };
+  }
+  if (entries.length > MAX_ROWS) {
+    return { ok: false, added: 0, errors: [], tooLarge: true };
+  }
+
+  // The set's paper printings, in checklist order, indexed three ways: by
+  // Scryfall id and collector number for exact rows, and by name — every
+  // printing of it, in order — for the rest. A double-faced card is also found
+  // by its front face alone, which is how some exports write it.
+  const printings = await prisma.cardgeneral.findMany({
+    where: { cardsetcode: unit.cardsetcode, ...PAPER_ONLY },
+    select: { scryfallid: true, name: true, collectornumber: true, finishes: true },
+  });
+  printings.sort((a, b) =>
+    compareCollectorNumber(a.collectornumber, b.collectornumber)
+  );
+  const byId = new Map(printings.map((p) => [p.scryfallid, p]));
+  const byNumber = new Map(
+    printings.map((p) => [String(p.collectornumber ?? "").toLowerCase(), p])
+  );
+  const byName = new Map();
+  for (const printing of printings) {
+    const full = nameKey(printing.name);
+    const front = nameKey(printing.name.split("//")[0]);
+    for (const key of new Set([full, front])) {
+      if (!key) continue;
+      if (!byName.has(key)) byName.set(key, []);
+      byName.get(key).push(printing);
+    }
+  }
+  const setcode = unit.cardsetcode.toLowerCase();
+
+  // The printing+finish one row lands on, or null when the set lacks the card.
+  const resolve = (entry) => {
+    const finish = FINISH_MAP[normalise(entry.foil ?? "")] ?? "nonfoil";
+    const offers = (p) => finishesFor(p).includes(finish);
+    const plain = (p) => {
+      const finishes = finishesFor(p);
+      return finishes.includes("nonfoil") ? "nonfoil" : finishes[0];
+    };
+
+    let exact = entry.scryfallid ? byId.get(entry.scryfallid) : null;
+    if (
+      !exact &&
+      String(entry.setcode ?? "").toLowerCase() === setcode &&
+      entry.collectornumber
+    ) {
+      exact = byNumber.get(String(entry.collectornumber).toLowerCase());
+    }
+    // A scanned printing of this set is trusted over everything else in the
+    // row: if the file's finish contradicts it (a "normal" flag on a
+    // foil-only borderless), the printing is the stronger evidence.
+    if (exact) {
+      return { printing: exact, variant: offers(exact) ? finish : plain(exact) };
+    }
+    // By name: the first printing that comes in the file's finish, else the
+    // first printing in its plain finish.
+    const candidates = byName.get(nameKey(entry.name)) ?? [];
+    const withFinish = candidates.find(offers);
+    if (withFinish) return { printing: withFinish, variant: finish };
+    const first = candidates[0];
+    return first ? { printing: first, variant: plain(first) } : null;
+  };
+
+  // Sum the file by the printing+finish each row resolves to — not by its
+  // text, since "Delver of Secrets" and "Delver of Secrets // Insectile
+  // Aberration" are one card. Names the set lacks are summed too, so the
+  // report says each missing card once, with its total.
+  const wanted = new Map();
+  const missing = new Map();
+  const errors = [];
+  for (const entry of entries) {
+    if (entry.blank) continue;
+    if (!nameKey(entry.name) && !entry.scryfallid) {
+      errors.push({ line: entry.line, name: null, reason: "no_name" });
+      continue;
+    }
+    const quantity = Math.min(
+      MAX_ROW_QUANTITY,
+      Math.max(1, parseInt(entry.quantity, 10) || 1)
+    );
+    const hit = resolve(entry);
+    const into = hit ? wanted : missing;
+    const id = hit
+      ? `${hit.printing.scryfallid}|${hit.variant}`
+      : nameKey(entry.name) || entry.scryfallid;
+    const seen = into.get(id);
+    if (seen) seen.quantity += quantity;
+    else
+      into.set(id, {
+        name: hit?.printing.name ?? (entry.name || entry.scryfallid),
+        ...hit,
+        quantity,
+      });
+  }
+  for (const { name, quantity } of missing.values()) {
+    errors.push({ name, quantity, reason: "not_in_edition" });
+  }
+
+  const { here } = await tallyContainer(prisma, unit.id);
+
+  let added = 0;
+  for (const [key, { name, printing, variant, quantity }] of wanted) {
+    const present = here.get(key) ?? 0;
+    const fits = Math.max(0, Math.min(quantity, MAX_EDITION_QUANTITY - present));
+    if (fits > 0) {
+      await setEditionQuantity(prisma, unit, collectionid, {
+        scryfallid: printing.scryfallid,
+        variant,
+        quantity: present + fits,
+      });
+      added += fits;
+    }
+    if (fits < quantity) {
+      errors.push({ name, quantity: quantity - fits, reason: "quantity_too_high" });
+    }
+  }
+
+  return { ok: true, format, added, cards: wanted.size, errors };
 }

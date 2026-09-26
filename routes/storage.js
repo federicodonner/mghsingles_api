@@ -53,6 +53,7 @@ import {
   readEditionRows,
   setEditionQuantity,
   MAX_EDITION_QUANTITY,
+  importEditionBox,
 } from "../services/editionBox.js";
 
 const TYPES = ["binder", "sorted_box", "unsorted_box", "edition_box"];
@@ -1015,7 +1016,9 @@ router.post(
 // Delver CSV export, verbatim; the format is auto-detected. Same possession and
 // ownership rules as /add below; the per-row semantics (binder pockets, empty
 // lines, condition/language kept faithfully) live in
-// services/collectionImport.js.
+// services/collectionImport.js. An edition box is the exception: it reads only
+// card names, sums repeats, and reports names its set lacks instead of filing
+// them (services/editionBox.js, importEditionBox).
 router.post(
   "/:storageId/import",
   [check("storageId").isNumeric()],
@@ -1036,8 +1039,6 @@ router.post(
 
     try {
       assertShopMayArrange(unit);
-      // A CSV carries cards from any set; an edition box holds exactly one.
-      assertNotEdition(unit);
 
       // Shop-owned containers file into the acting staff member's collection;
       // a customer's container into the customer's. If that collection is
@@ -1058,12 +1059,11 @@ router.post(
         return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
       }
 
-      const result = await importCards(
-        prisma,
-        unit,
-        collection.id,
-        req.body.csv
-      );
+      // An edition box reads the file by card name only and files every
+      // row into its own set — see importEditionBox.
+      const result = isEdition(unit)
+        ? await importEditionBox(prisma, unit, collection.id, req.body.csv)
+        : await importCards(prisma, unit, collection.id, req.body.csv);
       if (result.badFile) {
         return res.status(400).json({ message: messages.IMPORT_BAD_FILE });
       }
