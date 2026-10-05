@@ -14,11 +14,13 @@
 //   below is record-based, not line-based):
 //     Quantity, Card Name, Set, Set Code, Number, Foil/Etched, Unit Price,
 //     Total Price, Custom Price, Scryfall Id, ... , Rarity, Type Line, ...
+//   Delver's export columns are chosen by the user: Condition and Language are
+//   read when the file has them.
 //
 // Both carry a Scryfall Id, so resolution is exact when it is present; set code
-// + collector number is the fallback. Delver has no condition/language columns,
-// so those fall back to NM / English (the shop hides both in the UI anyway —
-// see services/identity.js for the hide-don't-drop decision).
+// + collector number is the fallback. Condition and language are kept when the
+// file states them and the import is run by STAFF; a missing or unknown value,
+// and every customer import, is NM / English (services/identity.js).
 //
 // Binders read the file as a map of the physical binder: the Nth card line is
 // the Nth pocket (nine per page). Delver files have no blank lines, so they
@@ -28,33 +30,96 @@ import { isPaperPrinting } from "./paper.js";
 import { addPrintingCopy } from "./copies.js";
 import { setBinderPosition, POCKETS_PER_PAGE } from "./storageContents.js";
 
-// ManaBox's seven grades onto the shop's five, order preserved. Keys are in
+// The apps' grades onto the shop's five, order preserved. Keys are in
 // NORMALISED form (lowercase, separators stripped) — "near_mint" -> "nearmint".
+// ManaBox uses the European scale (mint … poor); Delver the American one
+// (Near Mint, Lightly/Slightly/Moderately/Heavily Played, Damaged), in words
+// or abbreviated. The two scales line up as EX = LP, VG = MP, G = HP.
 const CONDITION_MAP = {
   mint: "NM",
+  m: "NM",
   nearmint: "NM",
+  nm: "NM",
   excellent: "EX",
+  ex: "EX",
+  lightlyplayed: "EX",
+  slightlyplayed: "EX",
+  lp: "EX",
+  sp: "EX",
   good: "VG",
+  gd: "VG",
+  verygood: "VG",
+  vg: "VG",
+  moderatelyplayed: "VG",
+  mp: "VG",
   lightplayed: "G",
   played: "G",
+  pl: "G",
+  heavilyplayed: "G",
+  hp: "G",
   poor: "damaged",
+  po: "damaged",
+  damaged: "damaged",
+  dmg: "damaged",
 };
 
-// ManaBox language codes onto the shop's language names. Languages the shop
-// does not track fall back to English rather than failing the row.
+// The apps' language codes and names onto the shop's language names, keys
+// NORMALISED like the grades. Languages the shop does not track fall back to
+// English rather than failing the row.
 const LANGUAGE_MAP = {
   en: "Inglés",
+  english: "Inglés",
   es: "Español",
   sp: "Español",
+  spanish: "Español",
   fr: "Francés",
+  french: "Francés",
   pt: "Portugués",
+  portuguese: "Portugués",
   de: "Alemán",
+  german: "Alemán",
   ja: "Japonés",
   jp: "Japonés",
+  japanese: "Japonés",
   zh: "Chino",
   zhs: "Chino",
   zht: "Chino",
+  chinese: "Chino",
+  chinesesimplified: "Chino",
+  chinesetraditional: "Chino",
+  simplifiedchinese: "Chino",
+  traditionalchinese: "Chino",
 };
+
+// Turns a row's condition and language text into the shop's ids. With
+// `keepGrades` false (a customer's import) the file is not consulted at all.
+// A shop that has no "damaged" grade files such a card under its worst one, G,
+// rather than promoting it to near-mint.
+export async function gradeResolver(prisma, { keepGrades = true } = {}) {
+  const [conditions, languages] = await Promise.all([
+    prisma.cardcondition.findMany(),
+    prisma.cardlanguage.findMany(),
+  ]);
+  const conditionByName = new Map(conditions.map((c) => [c.name, c.id]));
+  const languageByName = new Map(languages.map((l) => [l.name, l.id]));
+  const fallbackCondition = conditionByName.get("NM") ?? conditions[0]?.id;
+  const fallbackLanguage = languageByName.get("Inglés") ?? languages[0]?.id;
+  return (entry) => {
+    if (!keepGrades) {
+      return { conditionid: fallbackCondition, languageid: fallbackLanguage };
+    }
+    const grade = CONDITION_MAP[normalise(entry.condition ?? "")];
+    return {
+      conditionid:
+        conditionByName.get(grade) ??
+        (grade === "damaged" ? conditionByName.get("G") : undefined) ??
+        fallbackCondition,
+      languageid:
+        languageByName.get(LANGUAGE_MAP[normalise(entry.language ?? "")]) ??
+        fallbackLanguage,
+    };
+  };
+}
 
 // Finish words (both apps) onto the shop's three. Delver writes "Foil"/"Etched"
 // or leaves it blank; ManaBox writes "normal"/"foil"/"etched".
@@ -153,9 +218,9 @@ function canonicalRow(format, row, line) {
       scryfallid: row.scryfallid ?? "",
       foil: row.foiletched ?? "",
       quantity: row.quantity ?? "",
-      // Delver does not export grade or language.
-      condition: "",
-      language: "",
+      // Optional columns in Delver's export.
+      condition: row.condition ?? "",
+      language: row.language ?? "",
     };
   }
   // manabox
@@ -214,7 +279,16 @@ export const MAX_ROW_QUANTITY = 100;
 // Run the import. `unit` is the container, `collectionid` whose cards these
 // become. Auto-detects the format. Returns a summary; never throws for a bad
 // ROW — those are reported per line so one typo does not void a whole import.
-export async function importCards(prisma, unit, collectionid, text) {
+//
+// `keepGrades` false records every card as NM English whatever the file says —
+// the customer's import, since only the shop grades cards.
+export async function importCards(
+  prisma,
+  unit,
+  collectionid,
+  text,
+  { keepGrades = true } = {}
+) {
   const { format, entries } = parseImportFile(text);
   if (!format) {
     return { ok: false, added: 0, skipped: 0, errors: [], badFile: true };
@@ -223,14 +297,7 @@ export async function importCards(prisma, unit, collectionid, text) {
     return { ok: false, added: 0, skipped: 0, errors: [], tooLarge: true };
   }
 
-  const [conditions, languages] = await Promise.all([
-    prisma.cardcondition.findMany(),
-    prisma.cardlanguage.findMany(),
-  ]);
-  const conditionByName = new Map(conditions.map((c) => [c.name, c.id]));
-  const languageByName = new Map(languages.map((l) => [l.name, l.id]));
-  const fallbackCondition = conditionByName.get("NM") ?? conditions[0]?.id;
-  const fallbackLanguage = languageByName.get("Inglés") ?? languages[0]?.id;
+  const gradeOf = await gradeResolver(prisma, { keepGrades });
 
   let added = 0;
   let skipped = 0;
@@ -293,12 +360,7 @@ export async function importCards(prisma, unit, collectionid, text) {
       continue;
     }
 
-    const conditionid =
-      conditionByName.get(CONDITION_MAP[normalise(entry.condition ?? "")]) ??
-      fallbackCondition;
-    const languageid =
-      languageByName.get(LANGUAGE_MAP[(entry.language ?? "").toLowerCase()]) ??
-      fallbackLanguage;
+    const { conditionid, languageid } = gradeOf(entry);
 
     // Clamp per-row quantity so a single huge number cannot drive billions of
     // sequential inserts. A real stack in one sleeve is a few dozen at most.

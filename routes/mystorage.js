@@ -490,11 +490,14 @@ router.post(
         return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
       }
 
+      // The file's condition and language are ignored here: a customer's
+      // import is recorded as NM English, like a customer's manual add.
       const result = await importCards(
         prisma,
         unit,
         collection.id,
-        req.body.csv
+        req.body.csv,
+        { keepGrades: false }
       );
       if (result.badFile) {
         return res.status(400).json({ message: messages.IMPORT_BAD_FILE });
@@ -539,14 +542,9 @@ router.post(
       assertEditable(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
-      // The UI no longer asks for condition or language — a manual add is
-      // assumed NM English. Explicit values (a future ManaBox import) still
-      // land as sent; the columns keep being tracked either way.
-      const assumed = await defaultIdentity(prisma);
-      const conditionid =
-        parseInt(req.body.conditionid, 10) || assumed.conditionid;
-      const languageid =
-        parseInt(req.body.languageid, 10) || assumed.languageid;
+      // A customer never states condition or language — only the shop grades
+      // cards. Whatever the body says, the copy is recorded as NM English.
+      const { conditionid, languageid } = await defaultIdentity(prisma);
       const variant = String(req.body.variant ?? DEFAULT_FINISH).trim();
 
       const printing = await prisma.cardgeneral.findUnique({

@@ -27,6 +27,7 @@ import {
   MAX_ROW_QUANTITY,
   FINISH_MAP,
   normalise,
+  gradeResolver,
 } from "./collectionImport.js";
 
 // The most copies of one printing+finish an edition box will record.
@@ -314,6 +315,7 @@ export async function importEditionBox(prisma, unit, collectionid, text) {
   const wanted = new Map();
   const missing = new Map();
   const errors = [];
+  const gradeOf = await gradeResolver(prisma);
   for (const entry of entries) {
     if (entry.blank) continue;
     if (!nameKey(entry.name) && !entry.scryfallid) {
@@ -329,14 +331,25 @@ export async function importEditionBox(prisma, unit, collectionid, text) {
     const id = hit
       ? `${hit.printing.scryfallid}|${hit.variant}`
       : nameKey(entry.name) || entry.scryfallid;
-    const seen = into.get(id);
+    let seen = into.get(id);
     if (seen) seen.quantity += quantity;
-    else
-      into.set(id, {
+    else {
+      seen = {
         name: hit?.printing.name ?? (entry.name || entry.scryfallid),
         ...hit,
         quantity,
-      });
+        // How many of them in each condition+language, in file order.
+        grades: new Map(),
+      };
+      into.set(id, seen);
+    }
+    if (hit) {
+      const grade = gradeOf(entry);
+      const gradeKey = `${grade.conditionid}|${grade.languageid}`;
+      const tally = seen.grades.get(gradeKey);
+      if (tally) tally.quantity += quantity;
+      else seen.grades.set(gradeKey, { ...grade, quantity });
+    }
   }
   for (const { name, quantity } of missing.values()) {
     errors.push({ name, quantity, reason: "not_in_edition" });
@@ -345,16 +358,22 @@ export async function importEditionBox(prisma, unit, collectionid, text) {
   const { here } = await tallyContainer(prisma, unit.id);
 
   let added = 0;
-  for (const [key, { name, printing, variant, quantity }] of wanted) {
+  for (const [key, { name, printing, variant, quantity, grades }] of wanted) {
     const present = here.get(key) ?? 0;
     const fits = Math.max(0, Math.min(quantity, MAX_EDITION_QUANTITY - present));
-    if (fits > 0) {
-      await setEditionQuantity(prisma, unit, collectionid, {
-        scryfallid: printing.scryfallid,
-        variant,
-        quantity: present + fits,
-      });
-      added += fits;
+    // Copies are added one at a time in the grade the file gave them. (The
+    // checklist's own quantity field, setEditionQuantity, files NM English.)
+    let room = fits;
+    for (const grade of grades.values()) {
+      for (let i = 0; i < grade.quantity && room > 0; i++, room--) {
+        await addPrintingCopy(prisma, unit, collectionid, {
+          scryfallid: printing.scryfallid,
+          variant,
+          conditionid: grade.conditionid,
+          languageid: grade.languageid,
+        });
+        added++;
+      }
     }
     if (fits < quantity) {
       errors.push({ name, quantity: quantity - fits, reason: "quantity_too_high" });

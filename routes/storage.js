@@ -35,7 +35,7 @@ import {
   reorderPocketStack,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import { defaultIdentity } from "../services/identity.js";
+import { staffIdentity } from "../services/identity.js";
 import { importCards } from "../services/collectionImport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
@@ -830,8 +830,9 @@ router.put(
 // Another copy of the same card, in the stand-by area of the shop's binder.
 // Change ONE copy into another printing or finish of the same card. The
 // placement keeps its exact spot; only the copy's identity moves. Body:
-// { scryfallid, variant }. Shop-owned containers only, like duplicate and
-// remove — it changes the collection, not the arrangement.
+// { scryfallid, variant, conditionid?, languageid? } — the last two regrade
+// the copy and default to what it already is. Shop-owned containers only,
+// like duplicate and remove — it changes the collection, not the arrangement.
 router.put(
   "/placement/:placementId/version",
   [check("placementId").isNumeric()],
@@ -874,9 +875,21 @@ router.put(
           finishes: finishesFor(printing),
         });
       }
+      const current = await req.prisma.card.findUnique({
+        where: { id: placement.cardid },
+        select: { conditionid: true, languageid: true },
+      });
+      if (!current) {
+        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+      const identity = await staffIdentity(req.prisma, req.body, current);
+      if (!identity) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
       const moved = await changePrintingCopy(req.prisma, placement, {
         scryfallid,
         variant,
+        ...identity,
       });
       return res.status(200).json(moved);
     } catch (err) {
@@ -1113,14 +1126,12 @@ router.post(
       assertNotEdition(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
-      // The UI no longer asks for condition or language — a manual add is
-      // assumed NM English. Explicit values (a future ManaBox import) still
-      // land as sent; the columns keep being tracked either way.
-      const assumed = await defaultIdentity(prisma);
-      const conditionid =
-        parseInt(req.body.conditionid, 10) || assumed.conditionid;
-      const languageid =
-        parseInt(req.body.languageid, 10) || assumed.languageid;
+      // Staff grade the card as they file it; anything not sent is NM English.
+      const identity = await staffIdentity(prisma, req.body);
+      if (!identity) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      const { conditionid, languageid } = identity;
       const variant = String(req.body.variant ?? DEFAULT_FINISH).trim();
 
       const printing = await prisma.cardgeneral.findUnique({

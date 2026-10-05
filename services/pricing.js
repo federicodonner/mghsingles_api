@@ -195,6 +195,7 @@ export async function applyReferencePrices(
       buyprice: true,
       pricelocked: true,
       buypricelocked: true,
+      conditionid: true,
       cardgeneral: { select: { rarity: true } },
     },
   });
@@ -211,15 +212,14 @@ export async function applyReferencePrices(
     references.map((r) => [`${r.scryfallid}:${r.finish}`, r])
   );
 
-  // Every card prices as if near-mint (2026-08-23): the shop stopped showing
-  // condition, so a played copy must not undercut the NM price it is listed
-  // at. The rows still RECORD their real grade — only pricing ignores it.
-  const nm = await prisma.cardcondition.findFirst({
-    where: { name: "NM" },
-    select: { sellmultiplier: true, buymultiplier: true },
+  // Each card prices at its own grade (2026-10-05): the reference is the NM
+  // price, times the multipliers of the condition staff recorded for the row.
+  // The customer app never shows the grade — only the price it leads to.
+  const conditions = await prisma.cardcondition.findMany({
+    select: { id: true, sellmultiplier: true, buymultiplier: true },
   });
-  const sellMultiplier = nm?.sellmultiplier ?? new Prisma.Decimal(1);
-  const buyMultiplier = nm?.buymultiplier ?? new Prisma.Decimal(1);
+  const multipliersFor = new Map(conditions.map((c) => [c.id, c]));
+  const ONE = new Prisma.Decimal(1);
 
   const now = Math.round(Date.now() / 1000);
   let sell = 0;
@@ -237,6 +237,9 @@ export async function applyReferencePrices(
 
     const data = {};
     const rarity = card.cardgeneral?.rarity ?? null;
+    const multipliers = multipliersFor.get(card.conditionid);
+    const sellMultiplier = multipliers?.sellmultiplier ?? ONE;
+    const buyMultiplier = multipliers?.buymultiplier ?? ONE;
 
     // Rule 1 and 3: each side is considered on its own, and a locked side is
     // skipped without affecting the other.

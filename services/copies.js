@@ -210,28 +210,42 @@ export async function duplicateCopy(prisma, placement) {
 //
 // The placement stays exactly where it is — same pocket, depth or sequence —
 // only its identity moves: the copy leaves its card row and joins (or
-// creates) the row for the chosen printing, keeping its condition and
-// language. The freshly created row is priced on the spot, the same as any
-// other birth. Choosing the version the copy already is returns unchanged.
-export async function changePrintingCopy(prisma, placement, { scryfallid, variant }) {
+// creates) the row for the chosen printing. Condition and language stay as
+// they are unless the caller passes new ones (staff regrading a copy; the
+// customer route never does). The freshly created row is priced on the spot,
+// the same as any other birth. Choosing the version the copy already is
+// returns unchanged.
+export async function changePrintingCopy(
+  prisma,
+  placement,
+  { scryfallid, variant, conditionid = null, languageid = null }
+) {
   return prisma.$transaction(async (tx) => {
     const source = await tx.card.findUnique({
       where: { id: placement.cardid },
       include: { _count: { select: { cardplacement: true } } },
     });
     if (!source) throw new ContentsError(messages.CARD_NOT_FOUND, 404);
-    if (source.scryfallid === scryfallid && source.variant === variant) {
+    const grade = {
+      conditionid: conditionid ?? source.conditionid,
+      languageid: languageid ?? source.languageid,
+    };
+    if (
+      source.scryfallid === scryfallid &&
+      source.variant === variant &&
+      source.conditionid === grade.conditionid &&
+      source.languageid === grade.languageid
+    ) {
       return placement;
     }
 
-    // The copy's new home: same collection, condition and language, the
-    // chosen printing and finish. Same-identity rows merge, as everywhere.
+    // The copy's new home: same collection, the chosen printing, finish and
+    // grade. Same-identity rows merge, as everywhere.
     const existing = await tx.card.findFirst({
       where: {
         collectionid: source.collectionid,
         scryfallid,
-        conditionid: source.conditionid,
-        languageid: source.languageid,
+        ...grade,
         variant,
       },
     });
@@ -241,8 +255,7 @@ export async function changePrintingCopy(prisma, placement, { scryfallid, varian
         data: {
           collectionid: source.collectionid,
           scryfallid,
-          conditionid: source.conditionid,
-          languageid: source.languageid,
+          ...grade,
           variant,
           quantity: 0,
         },
