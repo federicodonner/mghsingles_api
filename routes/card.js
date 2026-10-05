@@ -245,9 +245,14 @@ router.get(
     };
     const setFilter = String(req.query.set ?? "").trim();
     if (setFilter) {
-      where.OR = [
-        { cardsetname: { contains: setFilter, mode: "insensitive" } },
-        { cardsetcode: { contains: setFilter, mode: "insensitive" } },
+      // AND, not where.OR: PAPER_ONLY is itself an OR and must survive.
+      where.AND = [
+        {
+          OR: [
+            { cardsetname: { contains: setFilter, mode: "insensitive" } },
+            { cardsetcode: { contains: setFilter, mode: "insensitive" } },
+          ],
+        },
       ];
     }
     const orderBy = [{ name: "asc" }, { cardsetcode: "asc" }];
