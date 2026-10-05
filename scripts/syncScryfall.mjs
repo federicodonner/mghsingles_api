@@ -19,11 +19,12 @@
 // Rows are never deleted. `card` and `sale` both reference cardgeneral, so a
 // printing that vanishes upstream stays put rather than breaking a sale record.
 //
-// Scryfall regenerates the bulk files once a day (observed: all seven within
-// ~17 minutes of 09:05 UTC), and stamps each with an id that changes only on
-// regeneration. This records every run in `syncrun` and skips outright when the
-// id has not moved, so scheduling it daily — or more often — costs one small
-// HTTP request on the days there is nothing new.
+// Scryfall regenerates the bulk files twice a day (observed: 09:05 and 21:05
+// UTC) and stamps each regeneration with a new `updated_at`. The entry's `id`
+// is NOT a version: it names the bulk file type and never changes. This records
+// every run in `syncrun` and skips outright when `updated_at` has not moved, so
+// scheduling it daily — or more often — costs one small HTTP request when there
+// is nothing new.
 import { createPrismaClient } from "../services/prisma.js";
 import { createGunzip } from "node:zlib";
 import { Readable } from "node:stream";
@@ -231,7 +232,7 @@ async function main() {
     where: { source: "default_cards", ok: true, skipped: false },
     orderBy: { started: "desc" },
   });
-  if (!FORCE && !DRY_RUN && last?.bulkid === entry.id) {
+  if (!FORCE && !DRY_RUN && last?.bulkupdated === entry.updated_at) {
     log(`unchanged since ${last.bulkupdated} — nothing to do (--force to override)`);
     await prisma.syncrun.create({
       data: {
