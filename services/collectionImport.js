@@ -89,13 +89,13 @@ const LANGUAGE_MAP = {
   chinesetraditional: "Chino",
   simplifiedchinese: "Chino",
   traditionalchinese: "Chino",
+  ru: "Ruso",
+  russian: "Ruso",
 };
 
-// Turns a row's condition and language text into the shop's ids. With
-// `keepGrades` false (a customer's import) the file is not consulted at all.
-// A shop that has no "damaged" grade files such a card under its worst one, G,
+// Turns a row's condition and language text into the shop's ids. A shop that has no "damaged" grade files such a card under its worst one, G,
 // rather than promoting it to near-mint.
-export async function gradeResolver(prisma, { keepGrades = true } = {}) {
+export async function gradeResolver(prisma) {
   const [conditions, languages] = await Promise.all([
     prisma.cardcondition.findMany(),
     prisma.cardlanguage.findMany(),
@@ -105,9 +105,6 @@ export async function gradeResolver(prisma, { keepGrades = true } = {}) {
   const fallbackCondition = conditionByName.get("NM") ?? conditions[0]?.id;
   const fallbackLanguage = languageByName.get("Inglés") ?? languages[0]?.id;
   return (entry) => {
-    if (!keepGrades) {
-      return { conditionid: fallbackCondition, languageid: fallbackLanguage };
-    }
     const grade = CONDITION_MAP[normalise(entry.condition ?? "")];
     return {
       conditionid:
@@ -279,16 +276,7 @@ export const MAX_ROW_QUANTITY = 100;
 // Run the import. `unit` is the container, `collectionid` whose cards these
 // become. Auto-detects the format. Returns a summary; never throws for a bad
 // ROW — those are reported per line so one typo does not void a whole import.
-//
-// `keepGrades` false records every card as NM English whatever the file says —
-// the customer's import, since only the shop grades cards.
-export async function importCards(
-  prisma,
-  unit,
-  collectionid,
-  text,
-  { keepGrades = true } = {}
-) {
+export async function importCards(prisma, unit, collectionid, text) {
   const { format, entries } = parseImportFile(text);
   if (!format) {
     return { ok: false, added: 0, skipped: 0, errors: [], badFile: true };
@@ -297,7 +285,7 @@ export async function importCards(
     return { ok: false, added: 0, skipped: 0, errors: [], tooLarge: true };
   }
 
-  const gradeOf = await gradeResolver(prisma, { keepGrades });
+  const gradeOf = await gradeResolver(prisma);
 
   let added = 0;
   let skipped = 0;

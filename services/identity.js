@@ -1,11 +1,11 @@
 // The condition and language a card is recorded with.
 //
-// Only the SHOP grades cards (2026-10-05): staff choose condition and language
-// when they file a card, and an import run by staff keeps what the file says.
-// A customer never states either — everything a customer adds or imports is
-// recorded as near-mint English, and the customer app shows neither. The
-// columns are still written on every row, so pricing can apply the condition
-// multipliers (services/pricing.js).
+// Whoever files a card grades it (2026-10-16 — before this only the shop did):
+// staff in the back office and customers in their own containers both choose
+// condition and language when they add or change a copy, and an import keeps
+// what the file says. Anything not stated is near-mint English. The columns
+// feed pricing's condition multipliers (services/pricing.js), and the
+// storefront shows both to shoppers.
 export const DEFAULT_CONDITION = "NM";
 export const DEFAULT_LANGUAGE = "Inglés";
 
@@ -22,11 +22,11 @@ export async function defaultIdentity(db) {
   };
 }
 
-// The identity a STAFF request asks for: `conditionid` / `languageid` from the
+// The identity a request asks for: `conditionid` / `languageid` from the
 // body where sent, `fallback` (default: NM English) where not. Returns null
 // when an id was sent that names no row, so the route can answer 400 instead
 // of tripping the foreign key.
-export async function staffIdentity(db, body, fallback = null) {
+export async function requestedIdentity(db, body, fallback = null) {
   const base = fallback ?? (await defaultIdentity(db));
   const sent = (value) => value !== undefined && value !== null && value !== "";
   let { conditionid, languageid } = base;

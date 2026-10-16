@@ -85,6 +85,8 @@ const messages = {
     "Las cajas de edición son de la tienda, no pueden tener otro dueño.",
   EDITION_WRONG_SET:
     "Esa carta no pertenece a la edición de esta caja.",
+  EDITION_GRADE_IS_DEFAULT:
+    "Las copias NM en inglés son las que no tienen variación: no hace falta especificarlas.",
   EDITION_QUANTITY_TOO_HIGH:
     "Demasiadas copias de la misma carta para una caja de edición.",
   EDITION_USE_QUANTITIES:

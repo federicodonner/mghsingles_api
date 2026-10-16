@@ -211,8 +211,8 @@ export async function duplicateCopy(prisma, placement) {
 // The placement stays exactly where it is — same pocket, depth or sequence —
 // only its identity moves: the copy leaves its card row and joins (or
 // creates) the row for the chosen printing. Condition and language stay as
-// they are unless the caller passes new ones (staff regrading a copy; the
-// customer route never does). The freshly created row is priced on the spot,
+// they are unless the caller passes new ones (whoever is regrading the copy:
+// staff, a customer in their own container, an edition box's variations). The freshly created row is priced on the spot,
 // the same as any other birth. Choosing the version the copy already is
 // returns unchanged.
 export async function changePrintingCopy(

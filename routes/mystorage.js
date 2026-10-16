@@ -29,7 +29,7 @@ import {
   reorderPocketStack,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import { defaultIdentity } from "../services/identity.js";
+import { requestedIdentity } from "../services/identity.js";
 import { importCards } from "../services/collectionImport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
@@ -490,15 +490,9 @@ router.post(
         return res.status(404).json({ message: messages.COLLECTION_PROBLEM });
       }
 
-      // The file's condition and language are ignored here: a customer's
-      // import is recorded as NM English, like a customer's manual add.
-      const result = await importCards(
-        prisma,
-        unit,
-        collection.id,
-        req.body.csv,
-        { keepGrades: false }
-      );
+      // The file's condition and language are kept, as for a staff import:
+      // the customer grades their own cards.
+      const result = await importCards(prisma, unit, collection.id, req.body.csv);
       if (result.badFile) {
         return res.status(400).json({ message: messages.IMPORT_BAD_FILE });
       }
@@ -542,9 +536,13 @@ router.post(
       assertEditable(unit);
 
       const scryfallid = String(req.body.scryfallid).trim();
-      // A customer never states condition or language — only the shop grades
-      // cards. Whatever the body says, the copy is recorded as NM English.
-      const { conditionid, languageid } = await defaultIdentity(prisma);
+      // The customer grades the copy as they file it, same as staff do;
+      // anything not sent is NM English.
+      const identity = await requestedIdentity(prisma, req.body);
+      if (!identity) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
+      const { conditionid, languageid } = identity;
       const variant = String(req.body.variant ?? DEFAULT_FINISH).trim();
 
       const printing = await prisma.cardgeneral.findUnique({
@@ -701,8 +699,9 @@ router.put(
 // out the same printing three times.
 // Change ONE copy into another printing or finish of the same card. The
 // placement keeps its exact spot; only the copy's identity moves. Body:
-// { scryfallid, variant }. Same bar as duplicate/remove: it changes the
-// collection, so only while the container is in the owner's hands.
+// { scryfallid, variant, conditionid?, languageid? } — the last two regrade
+// the copy and default to what it already is. Same bar as duplicate/remove: it
+// changes the collection, so only while the container is in the owner's hands.
 router.put(
   "/placement/:placementId/version",
   [check("placementId").isNumeric()],
@@ -742,9 +741,21 @@ router.put(
           finishes: finishesFor(printing),
         });
       }
+      const current = await req.prisma.card.findUnique({
+        where: { id: placement.cardid },
+        select: { conditionid: true, languageid: true },
+      });
+      if (!current) {
+        return res.status(404).json({ message: messages.CARD_NOT_FOUND });
+      }
+      const identity = await requestedIdentity(req.prisma, req.body, current);
+      if (!identity) {
+        return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+      }
       const moved = await changePrintingCopy(req.prisma, placement, {
         scryfallid,
         variant,
+        ...identity,
       });
       return res.status(200).json(moved);
     } catch (err) {

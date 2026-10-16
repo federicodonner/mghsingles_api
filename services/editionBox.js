@@ -19,7 +19,7 @@ import { ContentsError } from "./storageContents.js";
 import { PAPER_ONLY, isPaperPrinting } from "./paper.js";
 import { finishesFor } from "./finishes.js";
 import { defaultIdentity } from "./identity.js";
-import { addPrintingCopy, removeCopy } from "./copies.js";
+import { addPrintingCopy, removeCopy, changePrintingCopy } from "./copies.js";
 import { compareEditionRow, compareCollectorNumber } from "./editionOrder.js";
 import {
   parseImportFile,
@@ -44,27 +44,47 @@ export const MAX_EDITION_QUANTITY = 99;
 // promised to a buyer is physically in a bag on the counter, so the shop
 // counting the box will not find it. Showing it as present would make every
 // count come up short and invite somebody to "correct" it.
+//
+// `grades` breaks the copies in the box down by condition+language, keyed
+// like `here`, each value a Map "<conditionid>|<languageid>" -> count. Every
+// grade is in it, near-mint English included; the checklist decides what to
+// show.
 export async function tallyContainer(prisma, storageId) {
   const placements = await prisma.cardplacement.findMany({
     where: { storageid: storageId },
     select: {
       id: true,
       orderlineid: true,
-      card: { select: { scryfallid: true, variant: true } },
+      card: {
+        select: {
+          scryfallid: true,
+          variant: true,
+          conditionid: true,
+          languageid: true,
+        },
+      },
     },
     orderBy: { id: "asc" },
   });
 
   const here = new Map();
   const bagged = new Map();
+  const grades = new Map();
   for (const pl of placements) {
     if (!pl.card?.scryfallid) continue;
     const key = `${pl.card.scryfallid}|${pl.card.variant}`;
     const into = pl.orderlineid === null ? here : bagged;
     into.set(key, (into.get(key) ?? 0) + 1);
+    if (pl.orderlineid !== null) continue;
+    if (!grades.has(key)) grades.set(key, new Map());
+    const byGrade = grades.get(key);
+    const gradeKey = `${pl.card.conditionid}|${pl.card.languageid}`;
+    byGrade.set(gradeKey, (byGrade.get(gradeKey) ?? 0) + 1);
   }
-  return { here, bagged };
+  return { here, bagged, grades };
 }
+
+const gradeKeyOf = ({ conditionid, languageid }) => `${conditionid}|${languageid}`;
 
 // The checklist: every paper printing in the box's set, every finish it was
 // made in, with what the shop has of each.
@@ -77,7 +97,7 @@ export async function readEditionRows(prisma, unit) {
     throw new ContentsError(messages.STORAGE_NOT_EDITION);
   }
 
-  const [printings, set, tally] = await Promise.all([
+  const [printings, set, tally, conditions, languages, assumed] = await Promise.all([
     prisma.cardgeneral.findMany({
       where: { cardsetcode: unit.cardsetcode, ...PAPER_ONLY },
       select: {
@@ -91,7 +111,31 @@ export async function readEditionRows(prisma, unit) {
     }),
     prisma.cardset.findUnique({ where: { cardset: unit.cardsetcode } }),
     tallyContainer(prisma, unit.id),
+    prisma.cardcondition.findMany(),
+    prisma.cardlanguage.findMany(),
+    defaultIdentity(prisma),
   ]);
+  const conditionName = new Map(conditions.map((c) => [c.id, c.name]));
+  const languageName = new Map(languages.map((l) => [l.id, l.name]));
+  const defaultKey = gradeKeyOf(assumed);
+
+  // The copies that are NOT near-mint English — the row's variations, each
+  // counted on its own and on top of the row's near-mint English copies
+  // (`plain`).
+  const variationsOf = (key) =>
+    [...(tally.grades.get(key) ?? new Map())]
+      .filter(([gradeKey]) => gradeKey !== defaultKey)
+      .map(([gradeKey, quantity]) => {
+        const [conditionid, languageid] = gradeKey.split("|").map(Number);
+        return {
+          conditionid,
+          languageid,
+          condition: conditionName.get(conditionid) ?? null,
+          language: languageName.get(languageid) ?? null,
+          quantity,
+        };
+      })
+      .sort((a, b) => a.conditionid - b.conditionid || a.languageid - b.languageid);
 
   const rows = [];
   for (const printing of printings) {
@@ -104,8 +148,13 @@ export async function readEditionRows(prisma, unit) {
         image: printing.image,
         rarity: printing.rarity,
         variant,
+        // Every copy in the box, whatever its grade: what the box's progress
+        // and totals count.
         quantity: tally.here.get(key) ?? 0,
+        // The near-mint English ones — the number the row's own counter edits.
+        plain: tally.grades.get(key)?.get(defaultKey) ?? 0,
         bagged: tally.bagged.get(key) ?? 0,
+        grades: variationsOf(key),
       });
     }
   }
@@ -123,34 +172,12 @@ export async function readEditionRows(prisma, unit) {
   };
 }
 
-// Set how many copies of one printing+finish the box holds.
-//
-// The difference is what happens, not the number: asking for three when there
-// are two adds one copy, asking for one removes one. Nothing is deleted and
-// recreated, so the copies that stay keep their identity — and their prices,
-// their condition and their place in any open order.
-//
-// Copies are removed NEWEST first. The oldest copy of a card is the one most
-// likely to be the one an earlier flow already knows about; taking the most
-// recently added one back is the undo of the click that added it. Bagged
-// copies are never touched: they are not in the box, so they are not the
-// shop's to count down.
-export async function setEditionQuantity(
-  prisma,
-  unit,
-  collectionid,
-  { scryfallid, variant, quantity }
-) {
+// The printing+finish an edition-box request names, checked against the box:
+// it must be one of the box's set, on paper, in a finish it was printed in.
+async function editionPrinting(prisma, unit, scryfallid, variant) {
   if (unit.type !== "edition_box" || !unit.cardsetcode) {
     throw new ContentsError(messages.STORAGE_NOT_EDITION);
   }
-  if (!Number.isInteger(quantity) || quantity < 0) {
-    throw new ContentsError(messages.PARAMETERS_ERROR);
-  }
-  if (quantity > MAX_EDITION_QUANTITY) {
-    throw new ContentsError(messages.EDITION_QUANTITY_TOO_HIGH);
-  }
-
   const printing = await prisma.cardgeneral.findUnique({
     where: { scryfallid: String(scryfallid ?? "") },
   });
@@ -165,41 +192,131 @@ export async function setEditionQuantity(
   if (!isPaperPrinting(printing)) {
     throw new ContentsError(messages.CARD_DIGITAL_ONLY);
   }
-  const finishes = finishesFor(printing);
-  if (!finishes.includes(variant)) {
+  if (!finishesFor(printing).includes(variant)) {
     throw new ContentsError(messages.FINISH_NOT_AVAILABLE);
   }
+  return printing;
+}
 
-  // The copies of this printing+finish that are actually in the box, newest
-  // last. Bagged ones are excluded here, not filtered later, so they can
-  // neither be counted nor removed.
-  const present = await prisma.cardplacement.findMany({
+// The copies of one printing+finish that are actually in the box, oldest
+// first, each with its grade. Bagged ones are excluded here, not filtered
+// later, so they can neither be counted, removed nor regraded.
+function copiesInBox(prisma, unit, scryfallid, variant) {
+  return prisma.cardplacement.findMany({
     where: {
       storageid: unit.id,
       orderlineid: null,
-      card: { scryfallid: printing.scryfallid, variant },
+      card: { scryfallid, variant },
     },
-    include: { storage: { select: { type: true } } },
+    include: {
+      storage: { select: { type: true } },
+      card: { select: { conditionid: true, languageid: true } },
+    },
     orderBy: { id: "asc" },
   });
+}
 
-  if (quantity > present.length) {
-    const assumed = await defaultIdentity(prisma);
-    for (let i = present.length; i < quantity; i++) {
-      await addPrintingCopy(prisma, unit, collectionid, {
+const isGrade = (placement, grade) =>
+  placement.card.conditionid === grade.conditionid &&
+  placement.card.languageid === grade.languageid;
+
+// Setting a count adds or removes copies of ONE grade; copies in other grades
+// are never touched. The difference is what happens, not the number: asking
+// for three when there are two adds one copy, asking for one removes one.
+// Nothing is deleted and recreated, so the copies that stay keep their
+// identity — and their prices and their place in any open order.
+//
+// Copies are removed NEWEST first: the undo of the click that added them.
+// Bagged copies are never touched: they are not in the box, so they are not
+// the shop's to count down.
+//
+// The cap is on the row's TOTAL, every grade together — the box holds a few
+// of each card, not a case of them, and a quantity becomes that many inserts.
+async function setGradeCount(prisma, unit, collectionid, printing, variant, grade, quantity) {
+  if (!Number.isInteger(quantity) || quantity < 0) {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+  const present = await copiesInBox(prisma, unit, printing.scryfallid, variant);
+  const mine = present.filter((pl) => isGrade(pl, grade));
+  if (present.length - mine.length + quantity > MAX_EDITION_QUANTITY) {
+    throw new ContentsError(messages.EDITION_QUANTITY_TOO_HIGH);
+  }
+  for (let i = mine.length; i < quantity; i++) {
+    await addPrintingCopy(prisma, unit, collectionid, {
+      scryfallid: printing.scryfallid,
+      variant,
+      ...grade,
+    });
+  }
+  for (const placement of mine.slice(quantity).reverse()) {
+    await removeCopy(prisma, placement);
+  }
+}
+
+// Set how many NEAR-MINT ENGLISH copies of one printing+finish the box holds
+// — the row's own counter. Variations (setEditionGrade) are counted on top of
+// it, not out of it: four here plus two Japanese is six copies.
+export async function setEditionQuantity(
+  prisma,
+  unit,
+  collectionid,
+  { scryfallid, variant, quantity }
+) {
+  const printing = await editionPrinting(prisma, unit, scryfallid, variant);
+  const assumed = await defaultIdentity(prisma);
+  await setGradeCount(prisma, unit, collectionid, printing, variant, assumed, quantity);
+  return { scryfallid: printing.scryfallid, variant, quantity };
+}
+
+// Set how many copies of one printing+finish the box holds in one condition+
+// language other than near-mint English — a variation. It adds to the row's
+// near-mint English copies; it is not a share of them.
+//
+// `from` (optional, a { conditionid, languageid }) re-labels an existing
+// variation first: every copy in that grade moves to the new one — "it was
+// Spanish, not Japanese" — and then the quantity applies. Re-labelling onto
+// near-mint English folds the copies into the row's own count.
+export async function setEditionGrade(
+  prisma,
+  unit,
+  collectionid,
+  { scryfallid, variant, conditionid, languageid, quantity, from = null }
+) {
+  const printing = await editionPrinting(prisma, unit, scryfallid, variant);
+  const [condition, language] = await Promise.all([
+    Number.isInteger(conditionid)
+      ? prisma.cardcondition.findUnique({ where: { id: conditionid } })
+      : null,
+    Number.isInteger(languageid)
+      ? prisma.cardlanguage.findUnique({ where: { id: languageid } })
+      : null,
+  ]);
+  if (!condition || !language) {
+    throw new ContentsError(messages.PARAMETERS_ERROR);
+  }
+  const grade = { conditionid, languageid };
+  const assumed = await defaultIdentity(prisma);
+
+  if (from && !isGrade({ card: from }, grade)) {
+    const present = await copiesInBox(prisma, unit, printing.scryfallid, variant);
+    for (const placement of present.filter((pl) => isGrade(pl, from))) {
+      await changePrintingCopy(prisma, placement, {
         scryfallid: printing.scryfallid,
         variant,
-        conditionid: assumed.conditionid,
-        languageid: assumed.languageid,
+        ...grade,
       });
-    }
-  } else if (quantity < present.length) {
-    for (const placement of present.slice(quantity).reverse()) {
-      await removeCopy(prisma, placement);
     }
   }
 
-  return { scryfallid: printing.scryfallid, variant, quantity };
+  if (isGrade({ card: grade }, assumed)) {
+    // Near-mint English is the row's own counter, not a variation. Reaching
+    // here with `from` was a variation folding into it, which is done.
+    if (from) return { scryfallid: printing.scryfallid, variant, ...grade };
+    throw new ContentsError(messages.EDITION_GRADE_IS_DEFAULT);
+  }
+
+  await setGradeCount(prisma, unit, collectionid, printing, variant, grade, quantity);
+  return { scryfallid: printing.scryfallid, variant, ...grade, quantity };
 }
 
 // A card name as the import compares it: case, accents and spacing do not

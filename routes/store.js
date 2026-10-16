@@ -369,8 +369,9 @@ router.get(
 
 // Everything inside one for-sale container, shaped like the owner's own view
 // (binder pages of pockets, box lists) but flattened for shopping: every card
-// carries its live price and how many copies are actually buyable, and the
-// admin-side facts — owner, collection, condition, language — never leave.
+// carries its live price, how many copies are actually buyable, and its
+// condition and language. The admin-side facts — owner, collection — never
+// leave.
 router.get(
   "/units/:unitId",
   [check("unitId").isNumeric()],
@@ -448,6 +449,8 @@ router.get(
         cardsetname: pl.cardsetname,
         image: pl.image,
         variant: pl.variant,
+        condition: pl.condition,
+        language: pl.language,
         price: meta.price ?? null,
         available: meta.available ?? 0,
         mine: Boolean(meta.mine),

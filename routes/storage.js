@@ -35,7 +35,7 @@ import {
   reorderPocketStack,
 } from "../services/storageContents.js";
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
-import { staffIdentity } from "../services/identity.js";
+import { requestedIdentity } from "../services/identity.js";
 import { importCards } from "../services/collectionImport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
@@ -52,6 +52,7 @@ import { storeName } from "../services/locations.js";
 import {
   readEditionRows,
   setEditionQuantity,
+  setEditionGrade,
   MAX_EDITION_QUANTITY,
   importEditionBox,
 } from "../services/editionBox.js";
@@ -621,7 +622,8 @@ router.get(
   })
 );
 
-// Set how many copies of one printing+finish the box holds.
+// Set how many near-mint English copies of one printing+finish the box holds
+// — the row's own counter; variations (below) count on top of it.
 //
 // Body: { scryfallid, variant, quantity }. An absolute number rather than a
 // delta, because that is what the shop is looking at: somebody counting a box
@@ -661,6 +663,71 @@ router.put(
         scryfallid: String(req.body.scryfallid).trim(),
         variant: String(req.body.variant ?? DEFAULT_FINISH).trim(),
         quantity: parseInt(req.body.quantity, 10),
+      });
+      return res.status(200).json(result);
+    } catch (err) {
+      return handle(err, res);
+    }
+  })
+);
+
+// Set how many copies of one printing+finish the box holds in a
+// condition+language other than near-mint English — a variation, added on top
+// of the row's near-mint English copies (see setEditionGrade).
+//
+// Body: { scryfallid, variant, conditionid, languageid, quantity,
+// fromconditionid?, fromlanguageid? } — the `from` pair re-labels an existing
+// variation (all its copies move to the new grade) before the quantity
+// applies. Absolute, like the row quantity, for the same reason.
+router.put(
+  "/:storageId/edition/grade",
+  [
+    check("storageId").isNumeric(),
+    check("scryfallid").trim().notEmpty(),
+    check("conditionid").isInt(),
+    check("languageid").isInt(),
+    check("quantity").isInt({ min: 0 }),
+    check("fromconditionid").optional().isInt(),
+    check("fromlanguageid").optional().isInt(),
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    const hasFrom =
+      req.body.fromconditionid !== undefined || req.body.fromlanguageid !== undefined;
+    const fullFrom =
+      req.body.fromconditionid !== undefined && req.body.fromlanguageid !== undefined;
+    if (!errors.isEmpty() || (hasFrom && !fullFrom)) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const playerId = requirePlayerId(req);
+    const prisma = req.prisma;
+
+    const unit = await findEditionBox(prisma, res, req.params.storageId);
+    if (!unit) return;
+
+    // A raise past the copies in the box adds one, into the acting staff
+    // member's collection like any other edition-box copy.
+    const collection = await prisma.collection.findFirst({
+      where: { playerid: playerId, active: true },
+      select: { id: true },
+    });
+    if (!collection) {
+      return res.status(404).json({ message: messages.STOCK_NO_COLLECTION });
+    }
+
+    try {
+      const result = await setEditionGrade(prisma, unit, collection.id, {
+        scryfallid: String(req.body.scryfallid).trim(),
+        variant: String(req.body.variant ?? DEFAULT_FINISH).trim(),
+        conditionid: parseInt(req.body.conditionid, 10),
+        languageid: parseInt(req.body.languageid, 10),
+        quantity: parseInt(req.body.quantity, 10),
+        from: fullFrom
+          ? {
+              conditionid: parseInt(req.body.fromconditionid, 10),
+              languageid: parseInt(req.body.fromlanguageid, 10),
+            }
+          : null,
       });
       return res.status(200).json(result);
     } catch (err) {
@@ -882,7 +949,7 @@ router.put(
       if (!current) {
         return res.status(404).json({ message: messages.CARD_NOT_FOUND });
       }
-      const identity = await staffIdentity(req.prisma, req.body, current);
+      const identity = await requestedIdentity(req.prisma, req.body, current);
       if (!identity) {
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }
@@ -1127,7 +1194,7 @@ router.post(
 
       const scryfallid = String(req.body.scryfallid).trim();
       // Staff grade the card as they file it; anything not sent is NM English.
-      const identity = await staffIdentity(prisma, req.body);
+      const identity = await requestedIdentity(prisma, req.body);
       if (!identity) {
         return res.status(400).json({ message: messages.PARAMETERS_ERROR });
       }

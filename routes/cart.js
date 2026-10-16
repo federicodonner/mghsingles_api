@@ -25,6 +25,8 @@ const ITEM_INCLUDE = {
   card: {
     include: {
       cardgeneral: true,
+      cardcondition: { select: { name: true } },
+      cardlanguage: { select: { name: true } },
       collection: { select: { active: true } },
     },
   },
@@ -46,6 +48,8 @@ function describeItem(item, reserved, offSale) {
     cardsetname: general?.cardsetname ?? null,
     image: general?.image ?? null,
     variant: card?.variant ?? null,
+    condition: card?.cardcondition?.name ?? null,
+    language: card?.cardlanguage?.name ?? null,
     price: card?.price ?? null,
     available: buyable ? availableOf(card, reserved, offSale) : 0,
   };
