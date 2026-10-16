@@ -31,9 +31,12 @@ import { Readable } from "node:stream";
 import readline from "node:readline";
 
 // Scryfall returns an empty body to clients that do not identify themselves,
-// with no error — every field silently arrives undefined.
+// with no error — every field silently arrives undefined. Their policy also
+// requires the User-Agent to name this software uniquely (never a generic
+// "node"/"curl") and asks for the version to move with notable changes:
+// 1.1 is the switch to WebP images.
 const HEADERS = {
-  "User-Agent": "mghsingles/1.0 (https://github.com/federicodonner/mghsingles_api)",
+  "User-Agent": "mghsingles/1.1 (https://github.com/federicodonner/mghsingles_api)",
   Accept: "application/json",
 };
 
@@ -87,6 +90,45 @@ async function ensureIndexes() {
   );
 }
 
+// --- images ---------------------------------------------------------------
+// Scryfall moved its images to WebP (blog, 2026-10-14). The JPEG `normal` key
+// is renamed `jpeg` and kept only for legacy software; Scryfall asks everyone
+// else to use `grid`, the same 488x680 size as WebP. Every other JPEG size
+// (small, large, border_crop, art_crop) and hotlinking the PNG stop working
+// after 2027-01-01, so none of those may ever be stored.
+//
+// The stored URL is hotlinked by both UIs, thumbnail and zoom popup alike;
+// 488px wide covers the popup's 440px.
+//
+// `normal` stays last as a fallback only for a payload from before the change.
+export const pickImage = (uris) =>
+  uris?.grid ?? uris?.jpeg ?? uris?.normal ?? null;
+
+// URLs written before the switch point at the legacy JPEG — still served (it
+// is what `jpeg` resolves to) but not what Scryfall wants hotlinked. The path
+// differs only in size folder and extension, so rewrite in place:
+//   cards.scryfall.io/normal/front/b/0/<id>.jpg?v -> /grid/front/b/0/<id>.webp?v
+// cardgeneral rows still in the bulk file are rewritten by the upsert anyway;
+// this catches printings that left the file and the order lines' frozen
+// snapshots. Idempotent: once nothing matches, it updates nothing.
+const LEGACY_IMAGE = `'^(https://cards\\.scryfall\\.io/)normal/(.*)\\.jpg(\\?.*)?$'`;
+const GRID_IMAGE = `'\\1grid/\\2.webp\\3'`;
+async function migrateImageUrls() {
+  const [cards, lines] = await Promise.all([
+    prisma.$executeRawUnsafe(
+      `UPDATE cardgeneral SET image = regexp_replace(image, ${LEGACY_IMAGE}, ${GRID_IMAGE})
+        WHERE image ~ ${LEGACY_IMAGE}`
+    ),
+    prisma.$executeRawUnsafe(
+      `UPDATE orderline SET cardimage = regexp_replace(cardimage, ${LEGACY_IMAGE}, ${GRID_IMAGE})
+        WHERE cardimage ~ ${LEGACY_IMAGE}`
+    ),
+  ]);
+  if (cards || lines) {
+    log(`images: ${cards} card(s) and ${lines} order line(s) moved from JPEG to WebP`);
+  }
+}
+
 // --- sets -----------------------------------------------------------------
 // cardgeneral.cardsetcode is a foreign key, so every set must exist first.
 async function syncSets() {
@@ -136,7 +178,7 @@ async function syncSets() {
 function toRow(card, now) {
   // Double-faced cards carry their art on the front face rather than the card.
   const image =
-    card.image_uris?.normal ?? card.card_faces?.[0]?.image_uris?.normal ?? null;
+    pickImage(card.image_uris) ?? pickImage(card.card_faces?.[0]?.image_uris);
 
   const frameEffects = card.frame_effects ?? [];
   const promoTypes = card.promo_types ?? [];
@@ -248,7 +290,10 @@ async function main() {
     return;
   }
 
-  if (!DRY_RUN) await ensureIndexes();
+  if (!DRY_RUN) {
+    await ensureIndexes();
+    await migrateImageUrls();
+  }
   const knownSets = await syncSets();
 
   const res = await fetch(entry.jsonl_download_uri, { headers: HEADERS });

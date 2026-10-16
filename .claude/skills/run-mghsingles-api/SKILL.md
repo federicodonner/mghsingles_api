@@ -740,9 +740,17 @@ the old "npm start has no database" trap is fixed.
   `User-Agent` and `Accept: application/json` on every Scryfall call:
 
   ```bash
-  curl -s -H 'User-Agent: mghsingles/1.0' -H 'Accept: application/json' \
+  curl -s -H 'User-Agent: mghsingles/1.1' -H 'Accept: application/json' \
     'https://api.scryfall.com/cards/named?exact=Lightning%20Bolt' | head -c 120
   ```
+
+- **Card images are Scryfall's `grid` WebP, never a JPEG key.** Since
+  2026-10-14 Scryfall serves WebP; `normal` is renamed `jpeg` (legacy only) and
+  `small`/`large`/`border_crop`/`art_crop` JPEGs plus PNG hotlinking die on
+  2027-01-01. `pickImage` in `scripts/syncScryfall.mjs` is the one place that
+  chooses the key, and the sync rewrites any stored `/normal/…jpg` URL
+  (cardgeneral and orderline snapshots) to `/grid/…webp`. The User-Agent must
+  name this app uniquely; bump its version on notable sync changes.
 
 - **`cardgeneral`'s set-code column is `cardsetcode`; `cardset` is the relation**
   to the `cardset` table. Confusingly, the `cardset` table's own primary key is
