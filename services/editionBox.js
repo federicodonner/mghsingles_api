@@ -2,7 +2,7 @@
 //
 // Every other container is a list of the copies that happen to be in it. An
 // edition box is the opposite — it is the SET, printed out: every paper
-// printing the set has, in collector-number order, each finish on its own
+// printing the set has, in the order the box is set to, each finish on its own
 // line, and a quantity beside it that starts at zero. The shop does not add
 // and remove cards one at a time here; it says "I have three of this one",
 // which is how somebody actually fills a set box.
@@ -20,7 +20,7 @@ import { PAPER_ONLY, isPaperPrinting } from "./paper.js";
 import { finishesFor } from "./finishes.js";
 import { defaultIdentity } from "./identity.js";
 import { addPrintingCopy, removeCopy, changePrintingCopy } from "./copies.js";
-import { compareEditionRow, compareCollectorNumber } from "./editionOrder.js";
+import { editionComparator, compareCollectorNumber } from "./editionOrder.js";
 import {
   parseImportFile,
   MAX_ROWS,
@@ -107,6 +107,8 @@ export async function readEditionRows(prisma, unit) {
         image: true,
         rarity: true,
         finishes: true,
+        color: true,
+        manavalue: true,
       },
     }),
     prisma.cardset.findUnique({ where: { cardset: unit.cardsetcode } }),
@@ -147,6 +149,8 @@ export async function readEditionRows(prisma, unit) {
         collectornumber: printing.collectornumber,
         image: printing.image,
         rarity: printing.rarity,
+        color: printing.color,
+        manavalue: printing.manavalue,
         variant,
         // Every copy in the box, whatever its grade: what the box's progress
         // and totals count.
@@ -158,10 +162,11 @@ export async function readEditionRows(prisma, unit) {
       });
     }
   }
-  rows.sort(compareEditionRow);
+  rows.sort(editionComparator(unit.editionorder));
 
   return {
     cardsetcode: unit.cardsetcode,
+    order: unit.editionorder,
     cardsetname: set?.cardsetname ?? unit.cardsetcode,
     rows,
     // What the shop has in the box, and how much of the set that covers —

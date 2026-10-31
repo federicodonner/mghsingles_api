@@ -1,7 +1,7 @@
 // The order the cards sit in an edition box.
 //
 // A leaf module on purpose: `storageContents` reads an edition box's copies in
-// this order and `editionBox` builds the checklist in it, and those two already
+// these orders and `editionBox` builds the checklist in them, and those two already
 // depend on each other's neighbours. Keeping the comparison here means neither
 // has to import the other.
 
@@ -47,3 +47,33 @@ export const compareFinish = (a, b) =>
 export const compareEditionRow = (a, b) =>
   compareCollectorNumber(a.collectornumber, b.collectornumber) ||
   compareFinish(a.variant, b.variant);
+
+// The ways a box can be laid out. Mirrors the `editionorder` enum.
+export const EDITION_ORDERS = ["collector", "color_mana"];
+
+// Colours as `cardgeneral.color` stores them: a WUBRG-ordered string ("WU"),
+// or null for a colourless card. Single colours first in WUBRG order, then
+// each combination on its own (the pairs, then the shards, and so on), and
+// colourless last. Each exact combination is a group of its own, so the gold
+// cards of one guild are not shuffled in with another's.
+const WUBRG = "WUBRG";
+const colorSize = (color) => (color ? color.length : Infinity);
+const colorPosition = (color) =>
+  [...(color ?? "")].map((c) => WUBRG.indexOf(c)).join("");
+const compareColor = (a, b) =>
+  colorSize(a) === colorSize(b)
+    ? colorPosition(a).localeCompare(colorPosition(b))
+    : colorSize(a) < colorSize(b)
+      ? -1
+      : 1;
+
+// Colour, then mana value inside it. Cards that tie fall back to the box's
+// usual order, which also keeps a card's foil right beside its plain copy.
+const compareColorMana = (a, b) =>
+  compareColor(a.color, b.color) ||
+  (a.manavalue ?? 0) - (b.manavalue ?? 0) ||
+  compareEditionRow(a, b);
+
+// The comparison for a box set to `order`.
+export const editionComparator = (order) =>
+  order === "color_mana" ? compareColorMana : compareEditionRow;

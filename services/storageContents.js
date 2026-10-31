@@ -7,7 +7,7 @@
 //
 // Nothing in this file decides WHO may call it. That is the route's job.
 import messages from "../data/messages.js";
-import { compareEditionRow } from "./editionOrder.js";
+import { editionComparator } from "./editionOrder.js";
 
 export const POCKETS_PER_PAGE = 9; // 3x3
 
@@ -57,6 +57,9 @@ export function describePlacement(placement) {
     // What an edition box is ordered by, and the number printed on the card
     // itself — worth showing wherever a copy is listed.
     collectornumber: card?.cardgeneral?.collectornumber ?? null,
+    // The other thing an edition box can be ordered by.
+    color: card?.cardgeneral?.color ?? null,
+    manavalue: card?.cardgeneral?.manavalue ?? null,
     image: card?.cardgeneral?.image ?? null,
     variant: card?.variant ?? null,
     condition: card?.cardcondition?.name ?? null,
@@ -169,12 +172,12 @@ export async function readContents(prisma, unit, { spread } = {}) {
   });
   base.cards = placements.map(describePlacement);
 
-  // An edition box is sorted too, but by the set's own order rather than one
-  // anybody chose, so it stores no sequence: the collector number printed on
-  // the card IS the position. Sorting here (not in SQL) because the number is
-  // a string — see services/editionOrder.js.
+  // An edition box is sorted too, but by a rule rather than card by card, so
+  // it stores no sequence: what is printed on the card IS the position.
+  // Sorting here (not in SQL) because the collector number is a string — see
+  // services/editionOrder.js.
   if (unit.type === "edition_box") {
-    base.cards.sort(compareEditionRow);
+    base.cards.sort(editionComparator(unit.editionorder));
   }
 
   base.cardcount = placements.length;

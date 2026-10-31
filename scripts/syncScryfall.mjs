@@ -42,7 +42,7 @@ const HEADERS = {
 
 const BULK_INDEX = process.env.SCRYFALL_BULK_URL || "https://api.scryfall.com/bulk-data";
 const SETS_URL = "https://api.scryfall.com/sets";
-const BATCH = 500; // rows per INSERT; 500 x 16 params stays well under Postgres' 65535
+const BATCH = 500; // rows per INSERT; 500 x 24 params stays well under Postgres' 65535
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -196,7 +196,12 @@ function toRow(card, now) {
     frameEffects.includes("extendedart"),
     card.frame === "1997",
     promoTypes.includes("boxtopper"),
-    (card.colors ?? []).slice().sort(sortWUBRG).join("") || null,
+    // Double-faced cards carry their colours on the faces too.
+    (card.colors ?? card.card_faces?.[0]?.colors ?? [])
+      .slice()
+      .sort(sortWUBRG)
+      .join("") || null,
+    card.cmc ?? null,
     card.rarity ?? null,
     // Double-faced cards carry the type line on their faces; the front one is
     // what is printed on the card you would pull out of a binder.
@@ -220,7 +225,7 @@ function toRow(card, now) {
 const COLUMNS = [
   "scryfallid", "name", "cardsetcode", "cardsetname", "image",
   "borderless", "showcase", "phyrexian", "extendedart", "retroframe",
-  "boxtopper", "color", "rarity", "typeline", "collectornumber", "releasedatyear",
+  "boxtopper", "color", "manavalue", "rarity", "typeline", "collectornumber", "releasedatyear",
   "finishes", "games",
   "priceusd", "priceusdfoil", "priceusdetched", "priceeur", "pricesupdated",
 ];
@@ -233,6 +238,7 @@ const CASTS = {
   priceusdfoil: "::numeric",
   priceusdetched: "::numeric",
   priceeur: "::numeric",
+  manavalue: "::double precision",
   // Node gives Postgres a JS array; tell it the column type explicitly.
   finishes: "::text[]",
   games: "::text[]",

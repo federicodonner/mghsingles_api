@@ -118,6 +118,9 @@ model cardgeneral {
   releasedatyear  Int?
   boxtopper       Boolean @default(false)
   color           String?
+  /// Scryfall's `cmc`: the card's mana value. A float because Un-set cards
+  /// really do cost 0.5. Double-faced cards carry the front face's.
+  manavalue       Float?
   rarity          String?
   /// Scryfall's `type_line`, verbatim: "Legendary Creature — Zombie Wizard".
   /// Stored whole rather than split into a primary type, so the shop can filter
@@ -341,6 +344,10 @@ model storage {
   /// promise nothing keeps. Required (and enforced by the route) for
   /// `edition_box`, which is nothing but a set's checklist with quantities.
   cardsetcode   String?
+  /// How an `edition_box` is laid out: the set's own collector-number order,
+  /// or grouped by colour and by mana value inside each colour. Meaningless
+  /// for every other type.
+  editionorder  editionorder    @default(collector)
   cardset       cardset?        @relation(fields: [cardsetcode], references: [cardset], onDelete: NoAction, onUpdate: NoAction, map: "storage_cardset")
   player        player?         @relation(fields: [playerid], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "storage_player")
   cardplacement cardplacement[]
@@ -390,6 +397,11 @@ model cardplacement {
   @@unique([cardid, copyindex], map: "cardplacement_copy_unique")
   @@index([storageid, page, pocket, depth])
   @@index([storageid, sequence])
+}
+
+enum editionorder {
+  collector
+  color_mana
 }
 
 enum storagetype {

@@ -37,6 +37,7 @@ import {
 import { DEFAULT_FINISH, finishesFor } from "../services/finishes.js";
 import { requestedIdentity } from "../services/identity.js";
 import { importCards } from "../services/collectionImport.js";
+import { exportCards } from "../services/collectionExport.js";
 import { isPaperPrinting } from "../services/paper.js";
 import {
   removeCopy,
@@ -48,6 +49,7 @@ import {
   deleteContainerWithCards,
 } from "../services/copies.js";
 import { requirePlayerId } from "../middleware/asyncHandler.js";
+import { EDITION_ORDERS } from "../services/editionOrder.js";
 import { storeName } from "../services/locations.js";
 import {
   readEditionRows,
@@ -84,7 +86,8 @@ const STATE_MESSAGE = {
 
 // List storage units with a count of what is in them.
 //
-// `q` filters by container or owner name, `sort`/`dir` order by either, and
+// `q` filters by container or owner name, `state` by lifecycle state(s),
+// `sort`/`dir` order by name or owner, and
 // `page`/`limit` page the result — a shop with a wall of binders should not
 // pull every one of them on each visit. With `page` present the response is
 // `{ units, total }`; without it the whole (filtered, sorted) array comes
@@ -111,6 +114,17 @@ router.get(
            OR translate(lower(coalesce(s.storename, '')), 'áéíóúüñ', 'aeiouun') LIKE ${folded}
            OR translate(lower(coalesce(p.name, '')), 'áéíóúüñ', 'aeiouun') LIKE ${folded}`;
       where = { id: { in: hits.map((h) => h.id) } };
+    }
+
+    // `state` (comma-separated) narrows to those lifecycle states, so the
+    // admin list can page each of its sections on its own. Unknown values
+    // are dropped rather than rejected; if none survive, nothing matches.
+    if (req.query.state !== undefined) {
+      const states = String(req.query.state)
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => STATES.includes(s));
+      where.state = { in: states };
     }
 
     const dir = req.query.dir === "desc" ? "desc" : "asc";
@@ -619,6 +633,49 @@ router.get(
     } catch (err) {
       return handle(err, res);
     }
+  })
+);
+
+// The container as a ManaBox CSV, for download. Under /storage, so staff only
+// — /mystorage has no export. In a JSON envelope rather than as a raw file so
+// it comes back through the admin's one API helper, errors included.
+router.get(
+  "/:storageId/export",
+  [check("storageId").isNumeric()],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const unit = await req.prisma.storage.findUnique({
+      where: { id: parseInt(req.params.storageId, 10) },
+    });
+    if (!unit) {
+      return res.status(404).json({ message: messages.STORAGE_NOT_FOUND });
+    }
+    return res.status(200).json({ csv: await exportCards(req.prisma, unit) });
+  })
+);
+
+// Choose how the box is laid out. Body: { order }, one of EDITION_ORDERS. It
+// rearranges nothing that is stored: both orders are derived from the cards
+// on every read, so changing it is one field.
+router.put(
+  "/:storageId/edition/order",
+  [check("storageId").isNumeric(), check("order").isIn(EDITION_ORDERS)],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ message: messages.PARAMETERS_ERROR });
+    }
+    const unit = await findEditionBox(req.prisma, res, req.params.storageId);
+    if (!unit) return;
+
+    await req.prisma.storage.update({
+      where: { id: unit.id },
+      data: { editionorder: req.body.order },
+    });
+    return res.status(200).json({ order: req.body.order });
   })
 );
 

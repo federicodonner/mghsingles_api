@@ -87,6 +87,8 @@ const LANGUAGE_MAP = {
   chinese: "Chino",
   chinesesimplified: "Chino",
   chinesetraditional: "Chino",
+  zhcn: "Chino",
+  zhtw: "Chino",
   simplifiedchinese: "Chino",
   traditionalchinese: "Chino",
   ru: "Ruso",
