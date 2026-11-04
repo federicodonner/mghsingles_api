@@ -52,20 +52,13 @@ export const compareEditionRow = (a, b) =>
 export const EDITION_ORDERS = ["collector", "color_mana"];
 
 // Colours as `cardgeneral.color` stores them: a WUBRG-ordered string ("WU"),
-// or null for a colourless card. Single colours first in WUBRG order, then
-// each combination on its own (the pairs, then the shards, and so on), and
-// colourless last. Each exact combination is a group of its own, so the gold
-// cards of one guild are not shuffled in with another's.
+// or null for a colourless card. Seven groups: each single colour in WUBRG
+// order, then every multicoloured card together — the combination does not
+// matter, a guild card sits beside a shard card — and colourless last.
 const WUBRG = "WUBRG";
-const colorSize = (color) => (color ? color.length : Infinity);
-const colorPosition = (color) =>
-  [...(color ?? "")].map((c) => WUBRG.indexOf(c)).join("");
-const compareColor = (a, b) =>
-  colorSize(a) === colorSize(b)
-    ? colorPosition(a).localeCompare(colorPosition(b))
-    : colorSize(a) < colorSize(b)
-      ? -1
-      : 1;
+const colorGroup = (color) =>
+  !color ? 6 : color.length > 1 ? 5 : WUBRG.indexOf(color);
+const compareColor = (a, b) => colorGroup(a) - colorGroup(b);
 
 // Colour, then mana value inside it. Cards that tie fall back to the box's
 // usual order, which also keeps a card's foil right beside its plain copy.
