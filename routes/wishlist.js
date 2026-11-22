@@ -4,12 +4,9 @@
 //
 // An entry is a card NAME plus four independent constraints — version
 // (printing), language, grade (condition) and finish (variant). Each constraint
-// is a LIST, and an empty list means "any", so all of these are expressible:
-//
-//   any version, English only          -> versions [], languageids [1]
-//   these three printings, any language-> versions [a,b,c], languageids []
-//   any version, NM or EX, ES or EN    -> conditionids [1,2], languageids [1,2]
-//   any version, foil only             -> variants ["foil"]
+// is an EXPLICIT list of what is accepted, and never empty: a new entry starts
+// with every option listed, and the customer unticks what they do not want
+// (see services/wishlistOptions.js for why "empty means any" was dropped).
 //
 // Finish names are Scryfall's: nonfoil, foil, etched.
 //
@@ -27,7 +24,9 @@ import asyncHandler, { requirePlayerId } from "../middleware/asyncHandler.js";
 // are PERSISTED and re-scanned on every wishlist read and matcher run — an
 // unbounded array would be stored amplification. No real card has anywhere
 // near this many printings/languages/finishes.
-const MAX_CONSTRAINTS = 200;
+// Basic lands have ~900 printings, and an entry now lists every printing it
+// accepts, so the cap sits above that.
+const MAX_CONSTRAINTS = 2000;
 function readList(value, cast) {
   if (!Array.isArray(value)) return [];
   const cleaned = value
@@ -43,9 +42,16 @@ import { DEFAULT_FINISH } from "../services/finishes.js";
 import { releaseExpiredOrders } from "../services/orders.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 import { raisePinnedMatch, setAsideMatch, MatchError } from "../services/matches.js";
+import {
+  allOptions,
+  sharedOptions,
+  fillEmpty,
+  onlyValid,
+} from "../services/wishlistOptions.js";
 
-// Does this card satisfy the entry? Each category is checked independently and
-// an empty list is a wildcard.
+// Does this card satisfy the entry? Each category is checked independently.
+// Entries no longer store empty lists, but an empty one is still read as a
+// wildcard so a legacy row can never silently match nothing.
 function matches(entry, card) {
   if (entry.versions.length && !entry.versions.includes(card.scryfallid)) {
     return false;
@@ -89,8 +95,12 @@ async function attachFinishes(prisma, entries) {
   });
 
   const finishesByName = new Map();
+  // How many printings each card has, so a collapsed row can say "all" or
+  // "3 of 69" without loading the version grid.
+  const versionCountByName = new Map();
   for (const printing of printings) {
     const key = printing.name.toLowerCase();
+    versionCountByName.set(key, (versionCountByName.get(key) ?? 0) + 1);
     if (!finishesByName.has(key)) finishesByName.set(key, new Set());
     const set = finishesByName.get(key);
     for (const finish of printing.finishes.length
@@ -113,6 +123,7 @@ async function attachFinishes(prisma, entries) {
     availableFinishes: [
       ...(finishesByName.get(entry.name.toLowerCase()) ?? []),
     ],
+    versionCount: versionCountByName.get(entry.name.toLowerCase()) ?? 0,
   }));
 }
 
@@ -244,11 +255,9 @@ function readQuantity(value, fallback = MIN_WANTED) {
   return Math.min(MAX_WANTED, Math.max(MIN_WANTED, n));
 }
 
-// Merge two constraint lists.
-//
-// An EMPTY list means "any", so it is not a neutral element: unioning [X] into
-// [] would turn "any printing" into "only X", quietly narrowing an entry the
-// customer had left open. Either side being empty therefore keeps it empty.
+// Merge two constraint lists. Both are explicit now (incoming lists are filled
+// before merging); an empty one is only a legacy "any", which stays as broad
+// as it was.
 function union(current, incoming) {
   if (!current.length || !incoming.length) return [];
   const seen = new Set(current);
@@ -258,8 +267,8 @@ function union(current, incoming) {
 // Add a card name to the wishlist, optionally constrained from the start.
 // Import a public Moxfield deck into the wishlist. Body: { url } — the
 // deck's URL (or bare public id). Every card the deck needs (commanders,
-// mainboard, sideboard) becomes a wishlist entry with NO preferences — the
-// customer refines versions and finishes afterwards if they care. Names
+// mainboard, sideboard) becomes a wishlist entry accepting EVERY option — the
+// customer narrows it afterwards if they care. Names
 // already on the list are left alone (an import must not widen or reset
 // what somebody already tuned), and names the catalogue does not know are
 // reported back instead of silently dropped.
@@ -290,6 +299,7 @@ router.post(
     let added = 0;
     let existing = 0;
     const notfound = [];
+    const shared = await sharedOptions(prisma);
     for (const { name, quantity } of deck.cards) {
       // Same bar as a manual add: only names the catalogue knows, stored in
       // Scryfall's spelling.
@@ -318,10 +328,7 @@ router.post(
           name: known.name,
           created: Math.round(Date.now() / 1000),
           quantity: readQuantity(quantity),
-          versions: [],
-          languageids: [],
-          conditionids: [],
-          variants: [],
+          ...(await allOptions(prisma, known.name, shared)),
         },
       });
       added++;
@@ -353,6 +360,19 @@ router.post(
       return res.status(404).json({ message: messages.CARD_NOT_FOUND });
     }
 
+    // What was asked for, restricted to real options for this card; a category
+    // left out (or empty) means "all of them".
+    const all = await allOptions(prisma, known.name);
+    const asked = fillEmpty(
+      {
+        versions: onlyValid(readStrings(req.body.versions), all.versions),
+        languageids: onlyValid(readIds(req.body.languageids), all.languageids),
+        conditionids: onlyValid(readIds(req.body.conditionids), all.conditionids),
+        variants: onlyValid(readStrings(req.body.variants), all.variants),
+      },
+      all
+    );
+
     // Store Scryfall's spelling so entries collate regardless of what was typed.
     const existing = await prisma.wishlist.findFirst({
       where: {
@@ -378,10 +398,10 @@ router.post(
             existing.quantity,
             readQuantity(req.body.quantity, existing.quantity)
           ),
-          versions: union(existing.versions, readStrings(req.body.versions)),
-          languageids: union(existing.languageids, readIds(req.body.languageids)),
-          conditionids: union(existing.conditionids, readIds(req.body.conditionids)),
-          variants: union(existing.variants, readStrings(req.body.variants)),
+          versions: union(existing.versions, asked.versions),
+          languageids: union(existing.languageids, asked.languageids),
+          conditionids: union(existing.conditionids, asked.conditionids),
+          variants: union(existing.variants, asked.variants),
         },
       });
       return res.status(200).json({ ...merged, widened: true });
@@ -393,10 +413,7 @@ router.post(
         name: known.name,
         created: Math.round(Date.now() / 1000),
         quantity: readQuantity(req.body.quantity),
-        versions: readStrings(req.body.versions),
-        languageids: readIds(req.body.languageids),
-        conditionids: readIds(req.body.conditionids),
-        variants: readStrings(req.body.variants),
+        ...asked,
       },
     });
 
@@ -490,8 +507,10 @@ router.post(
 
 // Replace an entry's constraints.
 //
-// Each category is sent whole rather than patched, so clearing one back to
-// "any" is just an empty list. Omitting a category leaves it untouched.
+// Each category is sent whole rather than patched. Omitting a category leaves
+// it untouched; sending one that is empty (after dropping values that are not
+// real options for this card) is refused — every category must accept at
+// least one option.
 router.put(
   "/:wishlistId",
   [check("wishlistId").isNumeric()],
@@ -513,17 +532,24 @@ router.put(
     }
 
     const data = {};
-    if (req.body.versions !== undefined) {
-      data.versions = readStrings(req.body.versions);
-    }
-    if (req.body.languageids !== undefined) {
-      data.languageids = readIds(req.body.languageids);
-    }
-    if (req.body.conditionids !== undefined) {
-      data.conditionids = readIds(req.body.conditionids);
-    }
-    if (req.body.variants !== undefined) {
-      data.variants = readStrings(req.body.variants);
+    const sent = {
+      versions: readStrings,
+      languageids: readIds,
+      conditionids: readIds,
+      variants: readStrings,
+    };
+    const touched = Object.keys(sent).filter((k) => req.body[k] !== undefined);
+    if (touched.length) {
+      const all = await allOptions(prisma, entry.name);
+      for (const key of touched) {
+        const list = onlyValid(sent[key](req.body[key]), all[key]);
+        if (!list.length) {
+          return res
+            .status(400)
+            .json({ message: messages.WISHLIST_EMPTY_CATEGORY });
+        }
+        data[key] = list;
+      }
     }
     if (req.body.quantity !== undefined) {
       data.quantity = readQuantity(req.body.quantity, entry.quantity);

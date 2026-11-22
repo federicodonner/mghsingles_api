@@ -22,8 +22,8 @@ export class MatchError extends Error {
   }
 }
 
-// Merge one constraint list into another, where an EMPTY list means "any" —
-// so an existing broader entry stays as broad as it was.
+// Merge one constraint list into another. Lists are explicit now; an EMPTY one
+// is only a legacy "any", so an existing broader entry stays as broad as it was.
 function union(current, incoming) {
   if (!current.length || !incoming.length) return [];
   const seen = new Set(current);

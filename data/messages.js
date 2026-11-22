@@ -129,6 +129,8 @@ const messages = {
   CARD_NOT_AVAILABLE: "Esta carta no está a la venta.",
   WISHLIST_REPEAT: "Esa carta ya está en tu lista de deseados.",
   WISHLIST_NOT_FOUND: "Ese deseado no existe.",
+  WISHLIST_EMPTY_CATEGORY:
+    "Tenés que elegir al menos una opción en cada categoría.",
   WISHLIST_REMOVED: "La carta fue quitada de tu lista de deseados.",
   FINISH_NOT_AVAILABLE:
     "Esta versión de la carta no existe en esa terminación.",
