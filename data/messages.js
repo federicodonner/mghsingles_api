@@ -116,6 +116,8 @@ const messages = {
   PLACEMENT_REMOVED: "La carta fue retirada del contenedor.",
   ORDER_NOT_FOUND: "El pedido especificado no existe.",
   ORDER_NOT_PENDING: "El pedido ya fue cerrado.",
+  ORDER_STILL_PREPARING:
+    "Estas cartas todavía no están separadas. Apartalas desde Inicio antes de entregarlas.",
   ORDER_REPEAT_CARDS: "Hay cartas repetidas en el pedido.",
   ORDER_NOT_ENOUGH_STOCK:
     "No hay stock suficiente de una de las cartas para reservarla.",

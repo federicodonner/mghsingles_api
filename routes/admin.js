@@ -33,6 +33,8 @@ import { matches as matchesWishlist } from "./wishlist.js";
 import { availabilityFor, availableOf } from "../services/availability.js";
 import { setAsideMatch, MatchError } from "../services/matches.js";
 import {
+  readyQuantity,
+  splitOffUnpulled,
   releaseExpiredOrders,
   refileOrder,
   refileInstructions,
@@ -270,9 +272,35 @@ const ORDER_LINE_INCLUDE = {
       cardlanguage: { select: { name: true } },
     },
   },
+  // The pulled flags, to tell copies still on Home's prepare queue from the
+  // ones already in the bag; ids so the bag can be split before acting on it.
+  cardplacement: { select: { id: true, pulled: true } },
 };
 
-function describeOrder(order) {
+// A customer's pending bag as Pedidos shows it: only the units already
+// pulled. Copies still waiting are on Home's prepare queue and are left out
+// here — counted in `waiting` so the screen can say so, never listed or
+// charged. Counter bags and closed orders are shown whole.
+function readyPart(order) {
+  if (order.status !== "pending" || order.playerid == null) return order;
+  return {
+    ...order,
+    orderline: order.orderline
+      .map((line) => ({ ...line, quantity: readyQuantity(line) }))
+      .filter((line) => line.quantity > 0),
+  };
+}
+
+function waitingCount(order) {
+  if (order.status !== "pending" || order.playerid == null) return 0;
+  return order.orderline.reduce(
+    (n, line) => n + (line.cardplacement ?? []).filter((pl) => !pl.pulled).length,
+    0
+  );
+}
+
+function describeOrder(whole) {
+  const order = readyPart(whole);
   return {
     id: order.id,
     status: order.status,
@@ -300,6 +328,8 @@ function describeOrder(order) {
       .reduce((sum, line) => sum + Number(line.price) * line.quantity, 0)
       .toFixed(2),
     totalpesos: totalPesosOf(order),
+    // Copies of this bag still on Home's prepare queue (not in `lines`).
+    waiting: waitingCount(whole),
   };
 }
 
@@ -336,7 +366,14 @@ router.get(
       orderBy: [{ status: "asc" }, { created: "asc" }],
     });
 
-    return res.status(200).json(orders.map(describeOrder));
+    // A customer bag with nothing pulled yet has nothing to hand over: all of
+    // it is on Home's prepare queue, so it is not listed here.
+    const described = orders
+      .map(describeOrder)
+      .filter(
+        (o) => !(o.status === "pending" && o.player && o.lines.length === 0)
+      );
+    return res.status(200).json(described);
   })
 );
 
@@ -377,7 +414,7 @@ router.post(
             },
             // Which physical copies are in the bag, so the right ones are the
             // ones removed.
-            cardplacement: { select: { id: true } },
+            cardplacement: { select: { id: true, pulled: true } },
           },
         },
       },
@@ -388,10 +425,27 @@ router.post(
     if (order.status !== "pending") {
       return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
     }
+    // Only what is already in the bag is handed over and charged. Copies still
+    // waiting to be pulled stay reserved on Home's prepare queue, moved into a
+    // fresh pending order inside the transaction below.
+    const lines = order.orderline
+      .map((line) =>
+        order.playerid == null
+          ? line
+          : {
+              ...line,
+              quantity: readyQuantity(line),
+              cardplacement: line.cardplacement.filter((pl) => pl.pulled),
+            }
+      )
+      .filter((line) => line.quantity > 0);
+    if (!lines.length) {
+      return res.status(409).json({ message: messages.ORDER_STILL_PREPARING });
+    }
 
     // Stock can have moved since the reservation — a counter sale of the same
     // card does not know about holds. Re-check before committing.
-    const short = order.orderline.find(
+    const short = lines.find(
       (line) => !line.card || line.quantity > line.card.quantity
     );
     if (short) {
@@ -414,7 +468,8 @@ router.post(
 
     const today = nowSeconds();
     const settlement = await prisma.$transaction(async (tx) => {
-      for (const line of order.orderline) {
+      await splitOffUnpulled(tx, order);
+      for (const line of lines) {
         const placementIds = line.cardplacement.map((pl) => pl.id);
         // Freeze the card's identity onto the line before recordSale/
         // recordWithdrawal can delete a sold-out card's stock row — otherwise
@@ -454,7 +509,7 @@ router.post(
       // remainder is cash across the counter, reported so the till knows what
       // to charge.
       if (!payWithCredit) return null;
-      const total = order.orderline
+      const total = lines
         .filter((line) => line.kind !== "withdrawal")
         .reduce(
           (sum, line) => sum.add(new Prisma.Decimal(line.price).mul(line.quantity)),
@@ -476,7 +531,7 @@ router.post(
 
     // Nothing was charged if the whole bag was the customer's own cards going
     // home, so do not claim it was.
-    const chargedForAnything = order.orderline.some(
+    const chargedForAnything = lines.some(
       (line) => line.kind !== "withdrawal"
     );
     return res.status(200).json({
@@ -487,6 +542,19 @@ router.post(
     });
   })
 );
+
+// An order with what splitOffUnpulled needs: its lines and their copies'
+// pulled flags.
+function bagWithPlacements(db, orderId) {
+  return db.order.findUnique({
+    where: { id: orderId },
+    include: {
+      orderline: {
+        include: { cardplacement: { select: { id: true, pulled: true } } },
+      },
+    },
+  });
+}
 
 // Take ONE card out of a pending order, leaving the rest of the bag alone.
 //
@@ -517,9 +585,15 @@ router.delete(
     }
     const line = await prisma.orderline.findFirst({
       where: { id: lineId, orderid: orderId },
+      include: { cardplacement: { select: { id: true, pulled: true } } },
     });
     if (!line) {
       return res.status(404).json({ message: messages.ORDER_NOT_FOUND });
+    }
+    // Pedidos only lists what is already in the bag; a line whose copies all
+    // still wait on the prepare queue is not removable from here.
+    if (order.playerid != null && readyQuantity(line) === 0) {
+      return res.status(409).json({ message: messages.ORDER_STILL_PREPARING });
     }
 
     // Where the pulled copies have to go back — read before unlinking, the
@@ -560,6 +634,21 @@ router.delete(
         where: { orderlineid: lineId, pulled: true },
         data: { needsrefile: true },
       });
+      // Copies of this card still waiting on the prepare queue stay reserved:
+      // the line shrinks to them instead of going away. Same bag, so the
+      // customer keeps a single pick-up.
+      const waiting = line.quantity - readyQuantity(line);
+      if (order.playerid != null && waiting > 0) {
+        await tx.cardplacement.updateMany({
+          where: { orderlineid: lineId, pulled: true },
+          data: { orderlineid: null, pulled: false },
+        });
+        await tx.orderline.update({
+          where: { id: lineId },
+          data: { quantity: waiting },
+        });
+        return false;
+      }
       await tx.cardplacement.updateMany({
         where: { orderlineid: lineId },
         data: { orderlineid: null, pulled: false },
@@ -607,11 +696,24 @@ router.post(
       return res.status(400).json({ message: messages.ORDER_NOT_PENDING });
     }
 
+    // Cancelling from Pedidos cancels the bag the shop can see: what is
+    // already pulled. Copies still waiting on the prepare queue stay reserved
+    // (moved to a fresh bag below), so a customer bag with nothing pulled has
+    // nothing to cancel here.
+    const whole = await bagWithPlacements(prisma, id);
+    if (
+      order.playerid != null &&
+      !whole.orderline.some((line) => readyQuantity(line) > 0)
+    ) {
+      return res.status(409).json({ message: messages.ORDER_STILL_PREPARING });
+    }
+
     // Read the addresses before clearing them — this is the list of where each
     // card has to go back.
     const refile = await refileInstructions(prisma, id);
 
     await prisma.$transaction(async (tx) => {
+      await splitOffUnpulled(tx, whole);
       // Flag before unlinking: the flag is what keeps these cards on the home
       // page's refile panel until somebody has physically put them back, and
       // the where-clause needs the link that refileOrder is about to clear.

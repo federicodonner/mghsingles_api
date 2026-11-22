@@ -171,6 +171,88 @@ export function orderIsPreparing(order) {
   );
 }
 
+// The bag is split copy by copy, not order by order (2026-11-22, Federico): a
+// copy still waiting to be pulled lives on Home's prepare queue ONLY, and a
+// pulled one is part of the bag to hand over in Pedidos ONLY. The customer
+// keeps one open order, so copies confirmed on different days and pulled at
+// different times all add up to one pick-up.
+//
+// How many units of a line are ready to hand over: all of them except the
+// copies claimed onto it and not yet pulled. Units with no placement at all
+// (unlocated stock) never show on the prepare queue, so they count as ready —
+// every unit is on exactly one of the two screens. Expects the line's
+// cardplacements with `pulled` selected.
+export function readyQuantity(line) {
+  const waiting = (line.cardplacement ?? []).filter(
+    (pl) => pl.pulled === false
+  ).length;
+  return Math.max(line.quantity - waiting, 0);
+}
+
+// Before the shop acts on the ready part of a customer's bag (charge it,
+// cancel it, remove a line), move every copy still waiting to be pulled into a
+// fresh pending order for the same customer, so the action cannot touch cards
+// nobody has fetched. The new order inherits the original's dates, so it reads
+// as the same reservation; it becomes the customer's open bag once the old one
+// closes. A partially pulled line is split in two, its waiting placements
+// following the new line, along with the wishlist link (the pull handler
+// removes the wish when that line is fully pulled). Counter bags have no
+// prepare step and are left alone.
+//
+// Expects `order` with its lines and their cardplacements {id, pulled}.
+// Returns the new order, or null when nothing was waiting.
+export async function splitOffUnpulled(tx, order) {
+  if (order.playerid == null) return null;
+  const waitingLines = order.orderline.filter((line) =>
+    (line.cardplacement ?? []).some((pl) => pl.pulled === false)
+  );
+  if (!waitingLines.length) return null;
+
+  const rest = await tx.order.create({
+    data: {
+      playerid: order.playerid,
+      status: "pending",
+      created: order.created,
+      expires: order.expires,
+    },
+  });
+  for (const line of waitingLines) {
+    const waitingIds = line.cardplacement
+      .filter((pl) => pl.pulled === false)
+      .map((pl) => pl.id);
+    const ready = line.quantity - waitingIds.length;
+    if (ready <= 0) {
+      // Nothing of this line is in the bag yet: the whole line moves.
+      await tx.orderline.update({
+        where: { id: line.id },
+        data: { orderid: rest.id },
+      });
+      continue;
+    }
+    const moved = await tx.orderline.create({
+      data: {
+        orderid: rest.id,
+        cardid: line.cardid,
+        quantity: waitingIds.length,
+        price: line.price,
+        pricepesos: line.pricepesos,
+        baseprice: line.baseprice,
+        kind: line.kind,
+        wishlistid: line.wishlistid,
+      },
+    });
+    await tx.orderline.update({
+      where: { id: line.id },
+      data: { quantity: ready, wishlistid: null },
+    });
+    await tx.cardplacement.updateMany({
+      where: { id: { in: waitingIds } },
+      data: { orderlineid: moved.id },
+    });
+  }
+  return rest;
+}
+
 // The card's display identity, to freeze onto an order line at completion so a
 // completed order still shows its cards after the stock row (`card`) is deleted
 // — a card whose last copy leaves the shop is removed, which used to erase the
