@@ -81,25 +81,32 @@ app.use(json({ limit: "2mb" }));
 // against a single client hammering any one route. Counting is per client IP
 // (see `trust proxy` above). `standardHeaders` returns RateLimit-* so a well
 // behaved client can back off; failures answer JSON, not Express HTML.
-const rateLimited = (max, windowMinutes) =>
+const rateLimited = (max, windowMinutes, extra = {}) =>
   rateLimit({
     windowMs: windowMinutes * 60 * 1000,
     max,
     standardHeaders: true,
     legacyHeaders: false,
     message: { message: messages.TOO_MANY_REQUESTS },
+    ...extra,
   });
 
-// Login and registration: a handful of attempts a minute is plenty for a real
-// person and far below what a brute-force needs.
-const authLimiter = rateLimited(20, 15);
+// Login and registration. Only FAILED attempts count (skipSuccessfulRequests),
+// so a person who logs in fine never burns the budget, while a brute-force —
+// which is all failures — still stops after 20 tries in 15 minutes. Logout
+// (DELETE /oauth) is deliberately not limited: the admin UI calls it on any
+// API error, and throttling it used to lock staff out mid-session.
+const authLimiter = rateLimited(20, 15, { skipSuccessfulRequests: true });
 // The bulk imports are expensive; keep them infrequent per client.
 const importLimiter = rateLimited(10, 15);
-// A wide backstop for everything else.
-const globalLimiter = rateLimited(600, 15);
+// A wide backstop for everything else. Was 600/15min, which one staff member
+// loading cards into a container blew through in ~10 minutes (autocomplete on
+// every keystroke plus the list refetches after each add): ~690 requests in
+// 20 minutes on 2026-11-22. 5000 still stops a runaway client or scraper.
+const globalLimiter = rateLimited(5000, 15);
 
 app.use(globalLimiter);
-app.use("/oauth", authLimiter);
+app.post("/oauth", authLimiter);
 app.post("/player", authLimiter);
 // The bulk-import endpoints, throttled harder because each call is expensive.
 app.post("/storage/:id/import", importLimiter);
